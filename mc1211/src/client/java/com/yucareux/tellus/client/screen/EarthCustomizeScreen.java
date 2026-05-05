@@ -155,7 +155,7 @@ public class EarthCustomizeScreen extends Screen {
       int buttonY = this.height - 28;
       int buttonWidth = 75;
       int buttonSpacing = 4;
-      int totalWidth = buttonWidth * 4 + buttonSpacing * 3;
+      int totalWidth = buttonWidth * 3 + buttonSpacing * 2;
       int startX = this.width / 2 - totalWidth / 2;
       
       // 镜像设置按钮（中国玩家专用）
@@ -176,7 +176,7 @@ public class EarthCustomizeScreen extends Screen {
       
       // 完成按钮
       Component doneLabel = Objects.requireNonNull(Component.translatable("gui.done"), "doneLabel");
-      this.addRenderableWidget(Button.builder(doneLabel, button -> this.onClose()).bounds(startX + (buttonWidth + buttonSpacing) * 3, buttonY, buttonWidth, 20).build());
+      this.addRenderableWidget(Button.builder(doneLabel, button -> this.onClose()).bounds(startX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, 20).build());
    }
 
    private void onSettingsChanged() {
