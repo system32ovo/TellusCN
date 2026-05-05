@@ -106,9 +106,6 @@ public class Tellus implements ModInitializer {
    }
 
    public void onInitialize() {
-      // 初始化 TellusCN DNS 解析器（解决域名污染问题）
-      com.yucareux.tellus.config.TellusNameService.initialize();
-      
       Registry.register(BuiltInRegistries.BIOME_SOURCE, id("earth"), EarthBiomeSource.CODEC);
       Registry.register(BuiltInRegistries.CHUNK_GENERATOR, id("earth"), EarthChunkGenerator.CODEC);
       PayloadTypeRegistry.playC2S().register(GeoTpTeleportPayload.TYPE, Objects.requireNonNull(GeoTpTeleportPayload.CODEC.cast(), "geoTpTeleportCodec"));
