@@ -135,11 +135,10 @@ public class MirrorSettingsScreen extends Screen {
       // 说明文字在 render 中绘制
       
       // 启用镜像复选框
-      this.enableCheckbox = new Checkbox(
-         centerX - 150, startY, 300, 20,
-         ENABLE_MIRROR,
-         this.tempEnabled
-      );
+      this.enableCheckbox = Checkbox.builder(ENABLE_MIRROR, this.font)
+         .pos(centerX - 150, startY)
+         .selected(this.tempEnabled)
+         .build();
       this.addRenderableWidget(this.enableCheckbox);
       
       // 模式选择按钮（官方预设 / 自定义）

@@ -41,3 +41,6 @@ replay_*.log
 
 # deno deploy workers
 TellusCN-Cloudflare-Workers/
+
+# build logs
+action-build.log
