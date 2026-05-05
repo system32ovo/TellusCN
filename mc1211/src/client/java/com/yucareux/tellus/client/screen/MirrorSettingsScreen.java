@@ -4,6 +4,7 @@ import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.config.MirrorConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
@@ -79,11 +80,6 @@ public class MirrorSettingsScreen extends Screen {
       "saveButton"
    );
    
-   private static final Component CANCEL_BUTTON = Objects.requireNonNull(
-      Component.translatable("gui.cancel"),
-      "cancelButton"
-   );
-   
    private static final Component BACK_BUTTON = Objects.requireNonNull(
       Component.translatable("gui.back"),
       "backButton"
@@ -131,9 +127,6 @@ public class MirrorSettingsScreen extends Screen {
       int startY = 60;
       int lineHeight = 25;
       
-      // 标题和说明
-      // 说明文字在 render 中绘制
-      
       // 启用镜像复选框
       this.enableCheckbox = Checkbox.builder(ENABLE_MIRROR, this.font)
          .pos(centerX - 150, startY)
@@ -147,15 +140,12 @@ public class MirrorSettingsScreen extends Screen {
          })
          .withValues(MirrorMode.OFFICIAL, MirrorMode.CUSTOM)
          .withInitialValue(this.tempMode)
-         .create(centerX - 150, startY + lineHeight * 1.5, 300, 20, Component.empty(),
+         .create(centerX - 150, startY + (int)(lineHeight * 1.5), 300, 20, Component.empty(),
             (button, mode) -> {
                this.tempMode = mode;
                this.updateUIState();
             });
       this.addRenderableWidget(this.modeButton);
-      
-      // 官方预设选择（仅在官方模式下显示）
-      // 简化处理：使用 modeButton 切换，实际预设通过配置管理
       
       // 自定义域名输入框
       this.customDomainEditBox = new EditBox(
@@ -257,8 +247,8 @@ public class MirrorSettingsScreen extends Screen {
    }
    
    @Override
-   public void resize(int width, int height) {
-      super.resize(width, height);
+   public void resize(Minecraft minecraft, int width, int height) {
+      super.resize(minecraft, width, height);
       this.init(); // 重新初始化以调整布局
    }
    
