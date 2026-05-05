@@ -228,16 +228,5 @@
   "tellus.mirror_settings.back": "返回",
   "tellus.mirror_settings.official_preset": "官方预设 (telluscn-cdn1.hopto.org)",
   "tellus.mirror_settings.custom_input": "自定义输入",
-  "tellus.mirror_settings.disable_mirror": "关闭镜像、使用原版源",
-  
-  "tellus.customize.dns_settings": "DNS设置",
-  "tellus.dns_settings.title": "TellusCN DNS 设置",
-  "tellus.dns_settings.description": "配置自定义 DNS 解决域名污染问题",
-  "tellus.dns_settings.enable": "启用自定义 DNS",
-  "tellus.dns_settings.use_preset": "使用预设 DNS",
-  "tellus.dns_settings.use_custom": "使用自定义 DNS",
-  "tellus.dns_settings.preset_label": "选择 DNS 服务器",
-  "tellus.dns_settings.custom_label": "自定义 DNS 地址",
-  "tellus.dns_settings.custom_hint": "例如: 1.1.1.1 或 8.8.8.8",
-  "tellus.dns_settings.current_dns": "当前 DNS: %s"
+  "tellus.mirror_settings.disable_mirror": "关闭镜像、使用原版源"
 }

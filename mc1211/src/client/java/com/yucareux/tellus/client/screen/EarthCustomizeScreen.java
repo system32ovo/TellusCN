@@ -166,21 +166,13 @@ public class EarthCustomizeScreen extends Screen {
          }
       }).bounds(startX, buttonY, buttonWidth, 20).build());
       
-      // DNS 设置按钮（解决域名污染）
-      Component dnsLabel = Objects.requireNonNull(Component.translatable("tellus.customize.dns_settings"), "dnsLabel");
-      this.addRenderableWidget(Button.builder(dnsLabel, button -> {
-         if (this.minecraft != null) {
-            this.minecraft.setScreen(new DnsSettingsScreen(this));
-         }
-      }).bounds(startX + buttonWidth + buttonSpacing, buttonY, buttonWidth, 20).build());
-      
       // 出生点设置按钮
       Component spawnpointLabel = Objects.requireNonNull(Component.translatable("gui.earth.spawnpoint"), "spawnpointLabel");
       this.addRenderableWidget(Button.builder(spawnpointLabel, button -> {
          if (this.minecraft != null) {
             this.minecraft.setScreen(new EarthSpawnpointScreen(this));
          }
-      }).bounds(startX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, 20).build());
+      }).bounds(startX + buttonWidth + buttonSpacing, buttonY, buttonWidth, 20).build());
       
       // 完成按钮
       Component doneLabel = Objects.requireNonNull(Component.translatable("gui.done"), "doneLabel");
