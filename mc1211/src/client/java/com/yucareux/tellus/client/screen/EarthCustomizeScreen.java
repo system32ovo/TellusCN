@@ -153,14 +153,38 @@ public class EarthCustomizeScreen extends Screen {
       }
 
       int buttonY = this.height - 28;
+      int buttonWidth = 75;
+      int buttonSpacing = 4;
+      int totalWidth = buttonWidth * 4 + buttonSpacing * 3;
+      int startX = this.width / 2 - totalWidth / 2;
+      
+      // 镜像设置按钮（中国玩家专用）
+      Component mirrorLabel = Objects.requireNonNull(Component.translatable("tellus.customize.mirror_settings"), "mirrorLabel");
+      this.addRenderableWidget(Button.builder(mirrorLabel, button -> {
+         if (this.minecraft != null) {
+            this.minecraft.setScreen(new MirrorSettingsScreen(this));
+         }
+      }).bounds(startX, buttonY, buttonWidth, 20).build());
+      
+      // DNS 设置按钮（解决域名污染）
+      Component dnsLabel = Objects.requireNonNull(Component.translatable("tellus.customize.dns_settings"), "dnsLabel");
+      this.addRenderableWidget(Button.builder(dnsLabel, button -> {
+         if (this.minecraft != null) {
+            this.minecraft.setScreen(new DnsSettingsScreen(this));
+         }
+      }).bounds(startX + buttonWidth + buttonSpacing, buttonY, buttonWidth, 20).build());
+      
+      // 出生点设置按钮
       Component spawnpointLabel = Objects.requireNonNull(Component.translatable("gui.earth.spawnpoint"), "spawnpointLabel");
       this.addRenderableWidget(Button.builder(spawnpointLabel, button -> {
          if (this.minecraft != null) {
             this.minecraft.setScreen(new EarthSpawnpointScreen(this));
          }
-      }).bounds(this.width / 2 - 155, buttonY, 150, 20).build());
+      }).bounds(startX + (buttonWidth + buttonSpacing) * 2, buttonY, buttonWidth, 20).build());
+      
+      // 完成按钮
       Component doneLabel = Objects.requireNonNull(Component.translatable("gui.done"), "doneLabel");
-      this.addRenderableWidget(Button.builder(doneLabel, button -> this.onClose()).bounds(this.width / 2 + 5, buttonY, 150, 20).build());
+      this.addRenderableWidget(Button.builder(doneLabel, button -> this.onClose()).bounds(startX + (buttonWidth + buttonSpacing) * 3, buttonY, buttonWidth, 20).build());
    }
 
    private void onSettingsChanged() {

@@ -1,6 +1,7 @@
 package com.yucareux.tellus.world.data.osm;
 
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,10 +38,15 @@ public final class OverpassRoadClient {
    private final AtomicLong endpointCursor = new AtomicLong(0L);
 
    public OverpassRoadClient() {
+      // 优先使用游戏内配置
+      String mirrorEndpoint = TellusEndpointConfig.getOverpassEndpoint("");
       String endpointsProperty = System.getProperty("tellus.osm.overpass.endpoints");
       String singleEndpointProperty = System.getProperty("tellus.osm.overpass.endpoint");
       String endpointConfig;
-      if (endpointsProperty != null && !endpointsProperty.isBlank()) {
+      if (!mirrorEndpoint.isBlank()) {
+         // 使用镜像端点
+         endpointConfig = mirrorEndpoint;
+      } else if (endpointsProperty != null && !endpointsProperty.isBlank()) {
          endpointConfig = endpointsProperty;
       } else if (singleEndpointProperty != null && !singleEndpointProperty.isBlank()) {
          endpointConfig = singleEndpointProperty;

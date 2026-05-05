@@ -4,6 +4,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
@@ -65,7 +66,7 @@ public final class TellusOsmWaterSource implements TellusCacheHandle {
    private volatile boolean initialized;
 
    public TellusOsmWaterSource() {
-      String pmTilesUrl = System.getProperty("tellus.overture.water.pmtiles", DEFAULT_PM_TILES_URL);
+      String pmTilesUrl = TellusEndpointConfig.getOvertureWaterEndpoint(DEFAULT_PM_TILES_URL);
       this.pmTilesReader = new PmTilesRangeReader(pmTilesUrl, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, DIRECTORY_CACHE_ENTRIES);
       this.cache = CacheBuilder.newBuilder().maximumSize(MAX_CACHE_TILES).build(new CacheLoader<TellusOsmWaterSource.TileKey, OsmWaterTile>() {
          public OsmWaterTile load(TellusOsmWaterSource.TileKey key) {

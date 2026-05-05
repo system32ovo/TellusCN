@@ -4,6 +4,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
@@ -66,7 +67,7 @@ public final class TellusOsmSandSource implements TellusCacheHandle {
    private volatile boolean initialized;
 
    public TellusOsmSandSource() {
-      String pmTilesUrl = System.getProperty("tellus.overture.sand.pmtiles", DEFAULT_PM_TILES_URL);
+      String pmTilesUrl = TellusEndpointConfig.getOvertureSandEndpoint(DEFAULT_PM_TILES_URL);
       this.pmTilesReader = new PmTilesRangeReader(pmTilesUrl, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, DIRECTORY_CACHE_ENTRIES);
       this.cache = CacheBuilder.newBuilder().maximumSize(MAX_CACHE_TILES).build(new CacheLoader<TellusOsmSandSource.TileKey, OsmSandTile>() {
          public OsmSandTile load(TellusOsmSandSource.TileKey key) {

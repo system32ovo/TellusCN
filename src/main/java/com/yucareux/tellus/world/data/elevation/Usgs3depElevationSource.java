@@ -4,6 +4,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
@@ -26,7 +27,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.util.Mth;
 
 public final class Usgs3depElevationSource implements TellusCacheHandle {
-   private static final String ENDPOINT = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage";
+   private static final String DEFAULT_ENDPOINT = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage";
+   private static final String ENDPOINT = TellusEndpointConfig.getUsgsEndpoint(DEFAULT_ENDPOINT);
    private static final int HTTP_CONNECT_TIMEOUT = 8000;
    private static final int HTTP_READ_TIMEOUT = 30000;
    private static final String HTTP_USER_AGENT = "Tellus/1.0 (Minecraft Mod)";

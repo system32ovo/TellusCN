@@ -4,6 +4,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -31,7 +32,7 @@ public final class TellusLandMaskSource {
    private final boolean available;
 
    public TellusLandMaskSource() {
-      String baseUrl = System.getProperty("tellus.landmask.baseUrl", DEFAULT_BASE_URL);
+      String baseUrl = TellusEndpointConfig.getLandMaskBaseUrl(DEFAULT_BASE_URL);
       this.reader = new PmTilesReader(normalizeBaseUrl(baseUrl) + PMTILES_NAME);
       int resolvedMin = 0;
       int resolvedMax = 0;

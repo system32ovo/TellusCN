@@ -7,6 +7,7 @@ import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import java.io.ByteArrayInputStream;
@@ -452,7 +453,7 @@ public class ArcticDemElevationSource implements TellusCacheHandle {
       ARCTIC(
          "ArcticDEM",
          "arcticdem",
-         "https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/arcticdem/mosaics/v4.1",
+         TellusEndpointConfig.getArcticDemEndpoint("https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/arcticdem/mosaics/v4.1"),
          "tellus/cache/elevation-arcticdem/v4.1",
          TellusCacheDomain.ARCTICDEM,
          50.593818479,
@@ -462,7 +463,7 @@ public class ArcticDemElevationSource implements TellusCacheHandle {
       REMA(
          "REMA",
          "rema",
-         "https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/rema/mosaics/v2.0",
+         TellusEndpointConfig.getRemaEndpoint("https://pgc-opendata-dems.s3.us-west-2.amazonaws.com/rema/mosaics/v2.0"),
          "tellus/cache/elevation-rema/v2.0",
          TellusCacheDomain.REMA,
          -90.0,
@@ -1455,6 +1456,11 @@ public class ArcticDemElevationSource implements TellusCacheHandle {
             if (slash > 0) {
                String bucket = path.substring(0, slash);
                String key = path.substring(slash + 1);
+               // 支持通过 Workers 反代 S3 请求（使用新的配置系统）
+               String proxyBase = TellusEndpointConfig.getS3ProxyEndpoint("");
+               if (!proxyBase.isBlank()) {
+                  return proxyBase + "/" + bucket + "/" + key;
+               }
                return "https://" + bucket + ".s3.us-west-2.amazonaws.com/" + key;
             }
          }

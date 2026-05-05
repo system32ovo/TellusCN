@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -17,7 +18,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class NominatimGeocoder implements Geocoder {
-   private static final String SEARCH_URL = "https://nominatim.openstreetmap.org/search?format=json&limit=%d&q=%s";
+   private static final String DEFAULT_BASE_URL = "https://nominatim.openstreetmap.org";
+   private static final String BASE_URL = TellusEndpointConfig.getGeocodingEndpoint(DEFAULT_BASE_URL);
+   private static final String SEARCH_URL = BASE_URL + "/search?format=json&limit=%d&q=%s";
    private static final int GET_LIMIT = 1;
    private static final int SUGGEST_LIMIT = 5;
    private static final int CONNECT_TIMEOUT_MS = 5000;

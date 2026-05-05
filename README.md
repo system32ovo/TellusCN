@@ -2,6 +2,12 @@
 
 Tellus is a Fabric mod that recreates real-world terrain in Minecraft by generating Earth-scale landscapes from geographic data. It focuses on realistic elevation, biome placement, and climate-driven time and weather, aiming to make the world feel like a playable map of our planet.
 
+## Copyright
+
+- Original Author: Yucareux
+- TellusCN (Chinese Mirror & CDN Support): BlackHoleEra-Team
+- License: LGPL-3.0
+
 ![Tellus header image](images/Header%20image.png)
 
 Inspired by Gegy's Terrarium: https://modrinth.com/mod/terrarium

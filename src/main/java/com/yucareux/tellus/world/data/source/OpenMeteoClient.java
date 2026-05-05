@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -23,6 +24,8 @@ public final class OpenMeteoClient {
    private static final float SNOW_ACCUM_SCALE = 10.0F;
    private static final float TEMP_MELT_THRESHOLD = 2.0F;
    private static final String USER_AGENT = "Tellus/1.0 (open-meteo.com)";
+   private static final String DEFAULT_BASE_URL = "https://api.open-meteo.com/v1";
+   private static final String BASE_URL = TellusEndpointConfig.getWeatherEndpoint(DEFAULT_BASE_URL);
 
    public OpenMeteoClient.WeatherPointData fetch(double latitude, double longitude) throws IOException {
       String url = buildUrl(latitude, longitude);
@@ -118,7 +121,8 @@ public final class OpenMeteoClient {
    private static String buildUrl(double latitude, double longitude) {
       return String.format(
          Locale.ROOT,
-         "https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&current=weather_code,temperature_2m,precipitation,snowfall&hourly=temperature_2m,snowfall&past_days=%d&forecast_days=1&timezone=auto",
+         "%s/forecast?latitude=%.5f&longitude=%.5f&current=weather_code,temperature_2m,precipitation,snowfall&hourly=temperature_2m,snowfall&past_days=%d&forecast_days=1&timezone=auto",
+         BASE_URL,
          latitude,
          longitude,
          historyDays()

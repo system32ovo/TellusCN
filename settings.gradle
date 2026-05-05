@@ -18,3 +18,9 @@ rootProject.name = 'Tellus'
 include('mc1211')
 include('mc261')
 include('mc1201')
+
+dependencyResolutionManagement {
+	repositories {
+		mavenCentral()
+	}
+}

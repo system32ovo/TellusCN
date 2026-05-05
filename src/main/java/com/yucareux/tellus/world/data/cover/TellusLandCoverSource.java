@@ -7,6 +7,7 @@ import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import java.io.ByteArrayInputStream;
@@ -54,7 +55,8 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
    private static final ThreadLocal<TellusLandCoverSource.CoverBlendScratch> COVER_BLEND_SCRATCH = ThreadLocal.withInitial(
       TellusLandCoverSource.CoverBlendScratch::new
    );
-   private static final String ENDPOINT = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map";
+   private static final String DEFAULT_ENDPOINT = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map";
+   private static final String ENDPOINT = TellusEndpointConfig.getLandCoverEndpoint(DEFAULT_ENDPOINT);
    private static final String TILE_PATTERN = "ESA_WorldCover_10m_2021_v200_%s_Map.tif";
    private final Path cacheRoot = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/worldcover2021");
    private final LoadingCache<TellusLandCoverSource.TileKey, TellusLandCoverSource.GeoTiffTile> cache = CacheBuilder.newBuilder()

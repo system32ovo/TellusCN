@@ -11,6 +11,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.worldgen.EarthProjection;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
 import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Feature;
@@ -70,9 +71,7 @@ public final class TellusOsmRoadSource implements TellusCacheHandle {
    private volatile boolean initialized;
 
    public TellusOsmRoadSource() {
-      String pmTilesUrl = System.getProperty(
-         "tellus.overture.roads.pmtiles", DEFAULT_PM_TILES_URL
-      );
+      String pmTilesUrl = TellusEndpointConfig.getOvertureRoadsEndpoint(DEFAULT_PM_TILES_URL);
       this.pmTilesReader = new PmTilesRangeReader(pmTilesUrl, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, DIRECTORY_CACHE_ENTRIES);
       this.cache = CacheBuilder.newBuilder().maximumSize(MAX_CACHE_TILES).build(new CacheLoader<TellusOsmRoadSource.TileKey, OverpassRoadTile>() {
          public OverpassRoadTile load(TellusOsmRoadSource.TileKey key) {

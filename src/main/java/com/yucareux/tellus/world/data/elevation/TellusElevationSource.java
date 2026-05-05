@@ -7,6 +7,7 @@ import com.yucareux.tellus.cache.TellusCacheDomain;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import com.yucareux.tellus.world.data.mask.TellusLandMaskSource;
 import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
 import com.yucareux.tellus.worldgen.EarthGeneratorSettings;
@@ -40,7 +41,8 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private static final double POLAR_NORTH_MIN_LAT = 60.0;
    private static final double POLAR_SOUTH_MAX_LAT = -60.0;
    private static final double RESOLUTION_METERS = 30.0;
-   private static final String ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+   private static final String DEFAULT_ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+   private static final String ENDPOINT = TellusEndpointConfig.getElevationEndpoint(DEFAULT_ENDPOINT);
    private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
    // The normalized cache currently incurs a very expensive first-build path on cache misses.
    // Keep it opt-in until the ingest/build cost is low enough for preview and spawn-time terrain reads.

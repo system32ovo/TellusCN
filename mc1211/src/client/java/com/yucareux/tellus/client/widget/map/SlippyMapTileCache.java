@@ -6,6 +6,7 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.yucareux.tellus.Tellus;
+import com.yucareux.tellus.config.TellusEndpointConfig;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -108,7 +109,9 @@ public class SlippyMapTileCache {
       if (Files.exists(cachePath)) {
          return new BufferedInputStream(Files.newInputStream(cachePath));
       } else {
-         URI uri = URI.create(String.format("https://tile.openstreetmap.org/%s/%s/%s.png", pos.getZoom(), pos.getX(), pos.getY()));
+         // 获取地图瓦片 URL（支持镜像配置）
+         String tileUrl = getTileUrl(pos);
+         URI uri = URI.create(tileUrl);
          URL url = uri.toURL();
          HttpURLConnection connection = (HttpURLConnection)url.openConnection();
          try {
@@ -134,6 +137,27 @@ public class SlippyMapTileCache {
             connection.disconnect();
          }
       }
+   }
+   
+   /**
+    * 获取地图瓦片 URL
+    * 优先级：镜像配置 > JVM 参数 > 默认官方源
+    */
+   private String getTileUrl(SlippyMapTilePos pos) {
+      String mirrorEndpoint = TellusEndpointConfig.getMapTilesEndpoint("");
+      if (!mirrorEndpoint.isBlank()) {
+         // 使用镜像端点
+         return String.format("%s/%s/%s/%s.png", mirrorEndpoint, pos.getZoom(), pos.getX(), pos.getY());
+      }
+      
+      // 检查 JVM 参数
+      String jvmEndpoint = System.getProperty("tellus.map.tiles.endpoint");
+      if (jvmEndpoint != null && !jvmEndpoint.isBlank()) {
+         return String.format("%s/%s/%s/%s.png", jvmEndpoint, pos.getZoom(), pos.getX(), pos.getY());
+      }
+      
+      // 使用默认官方源
+      return String.format("https://tile.openstreetmap.org/%s/%s/%s.png", pos.getZoom(), pos.getX(), pos.getY());
    }
 
    private void cacheData(Path cachePath, byte[] data) {
