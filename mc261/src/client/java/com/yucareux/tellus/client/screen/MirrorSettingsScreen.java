@@ -5,10 +5,8 @@ import com.yucareux.tellus.config.MirrorConfig;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Checkbox;
-import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -18,7 +16,7 @@ import net.minecraft.ChatFormatting;
 import java.util.Objects;
 
 /**
- * TellusCN 镜像设置界面
+ * TellusCN 镜像设置界面 (Minecraft 26.1 兼容版本)
  *
  * 为中国玩家提供便捷的数据源镜像配置
  */
@@ -38,6 +36,11 @@ public class MirrorSettingsScreen extends Screen {
    private static final Component ENABLE_MIRROR = Objects.requireNonNull(
       Component.translatable("tellus.mirror_settings.enable"),
       "enableMirror"
+   );
+
+   private static final Component DISABLE_MIRROR = Objects.requireNonNull(
+      Component.translatable("tellus.mirror_settings.disable_mirror"),
+      "disableMirror"
    );
 
    private static final Component USE_OFFICIAL = Objects.requireNonNull(
@@ -87,9 +90,10 @@ public class MirrorSettingsScreen extends Screen {
 
    private final Screen parent;
 
-   // UI 组件
-   private Checkbox enableCheckbox;
-   private CycleButton<MirrorMode> modeButton;
+   // UI 组件 (mc261 使用 Button 替代 Checkbox 和 CycleButton)
+   private Button enableButton;
+   private Button officialModeButton;
+   private Button customModeButton;
    private EditBox customDomainEditBox;
    private Button saveButton;
 
@@ -127,30 +131,44 @@ public class MirrorSettingsScreen extends Screen {
       int startY = 60;
       int lineHeight = 25;
 
-      // 启用镜像复选框
-      this.enableCheckbox = Checkbox.builder(ENABLE_MIRROR, this.font)
-         .pos(centerX - 150, startY)
-         .selected(this.tempEnabled)
-         .build();
-      this.addRenderableWidget(this.enableCheckbox);
-
-      // 模式选择按钮（官方预设 / 自定义）
-      this.modeButton = CycleButton.<MirrorMode>builder(mode -> {
-            return mode == MirrorMode.OFFICIAL ? USE_OFFICIAL : USE_CUSTOM;
-         })
-         .withValues(MirrorMode.OFFICIAL, MirrorMode.CUSTOM)
-         .withInitialValue(this.tempMode)
-         .create(centerX - 150, startY + (int)(lineHeight * 1.5), 300, 20, Component.empty(),
-            (button, mode) -> {
-               this.tempMode = mode;
+      // 启用/禁用镜像按钮 (替代 Checkbox)
+      this.enableButton = Button.builder(
+            this.tempEnabled ? DISABLE_MIRROR : ENABLE_MIRROR,
+            button -> {
+               this.tempEnabled = !this.tempEnabled;
+               button.setMessage(this.tempEnabled ? DISABLE_MIRROR : ENABLE_MIRROR);
                this.updateUIState();
-            });
-      this.addRenderableWidget(this.modeButton);
+            })
+         .bounds(centerX - 150, startY, 300, 20)
+         .build();
+      this.addRenderableWidget(this.enableButton);
+
+      // 官方预设模式按钮
+      this.officialModeButton = Button.builder(
+            USE_OFFICIAL,
+            button -> {
+               this.tempMode = MirrorMode.OFFICIAL;
+               this.updateUIState();
+            })
+         .bounds(centerX - 150, startY + lineHeight * 2, 145, 20)
+         .build();
+      this.addRenderableWidget(this.officialModeButton);
+
+      // 自定义模式按钮
+      this.customModeButton = Button.builder(
+            USE_CUSTOM,
+            button -> {
+               this.tempMode = MirrorMode.CUSTOM;
+               this.updateUIState();
+            })
+         .bounds(centerX + 5, startY + lineHeight * 2, 145, 20)
+         .build();
+      this.addRenderableWidget(this.customModeButton);
 
       // 自定义域名输入框
       this.customDomainEditBox = new EditBox(
          this.font,
-         centerX - 150, startY + lineHeight * 3, 300, 20,
+         centerX - 150, startY + lineHeight * 4, 300, 20,
          CUSTOM_DOMAIN_LABEL
       );
       this.customDomainEditBox.setValue(this.tempCustomDomain);
@@ -173,20 +191,26 @@ public class MirrorSettingsScreen extends Screen {
    }
 
    private void updateUIState() {
-      boolean enabled = this.enableCheckbox.selected();
-      boolean isCustom = this.tempMode == MirrorMode.CUSTOM;
+      // 更新模式按钮状态
+      this.officialModeButton.active = this.tempEnabled && this.tempMode != MirrorMode.OFFICIAL;
+      this.customModeButton.active = this.tempEnabled && this.tempMode != MirrorMode.CUSTOM;
 
-      this.modeButton.active = enabled;
-      this.customDomainEditBox.active = enabled && isCustom;
-      this.saveButton.active = true;
+      // 更新输入框状态
+      this.customDomainEditBox.active = this.tempEnabled && this.tempMode == MirrorMode.CUSTOM;
+
+      // 更新启用按钮样式
+      if (this.tempEnabled) {
+         this.enableButton.setMessage(DISABLE_MIRROR);
+      } else {
+         this.enableButton.setMessage(ENABLE_MIRROR);
+      }
    }
 
    private void saveAndClose() {
       // 保存配置
-      boolean enabled = this.enableCheckbox.selected();
-      MirrorConfig.setEnabled(enabled);
+      MirrorConfig.setEnabled(this.tempEnabled);
 
-      if (enabled) {
+      if (this.tempEnabled) {
          if (this.tempMode == MirrorMode.CUSTOM) {
             String domain = this.customDomainEditBox.getValue().trim();
             MirrorConfig.setCustomDomain(domain);
@@ -198,7 +222,7 @@ public class MirrorSettingsScreen extends Screen {
       }
 
       Tellus.LOGGER.info("Mirror config saved: enabled={}, mode={}, domain={}",
-         enabled, this.tempMode, this.customDomainEditBox.getValue());
+         this.tempEnabled, this.tempMode, this.customDomainEditBox.getValue());
 
       this.onClose();
    }
@@ -210,22 +234,22 @@ public class MirrorSettingsScreen extends Screen {
       }
    }
 
-   @Override
-   public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-      this.renderBackground(graphics, mouseX, mouseY, partialTick);
+   // mc261 使用 extractRenderState 替代 render
+   public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+      super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 
       int centerX = this.width / 2;
 
       // 绘制标题
-      graphics.drawCenteredString(this.font, this.title, centerX, 20, 0xFFFFFF);
+      graphics.centeredText(this.font, this.title, centerX, 20, 0xFFFFFF);
 
       // 绘制说明
-      graphics.drawCenteredString(this.font, DESCRIPTION, centerX, 40, 0xAAAAAA);
+      graphics.centeredText(this.font, DESCRIPTION, centerX, 40, 0xAAAAAA);
 
       // 绘制当前状态
       Component status = MirrorConfig.isEnabled() ? STATUS_ENABLED : STATUS_DISABLED;
       Component statusText = CURRENT_STATUS.copy().append(": ").append(status);
-      graphics.drawString(this.font, statusText, 20, this.height - 60, 0xFFFFFF);
+      graphics.text(this.font, statusText, 20, this.height - 60, 0xFFFFFF);
 
       // 如果启用了镜像，显示当前使用的域名
       if (MirrorConfig.isEnabled()) {
@@ -234,16 +258,19 @@ public class MirrorSettingsScreen extends Screen {
             Component domainText = Component.literal("URL: ").append(
                Component.literal(domain).withStyle(ChatFormatting.YELLOW)
             );
-            graphics.drawString(this.font, domainText, 20, this.height - 48, 0xFFFFFF);
+            graphics.text(this.font, domainText, 20, this.height - 48, 0xFFFFFF);
          }
       }
 
       // 绘制标签
-      if (this.tempMode == MirrorMode.CUSTOM && this.enableCheckbox.selected()) {
-         graphics.drawString(this.font, CUSTOM_DOMAIN_LABEL, centerX - 150, 105, 0xFFFFFF);
+      if (this.tempMode == MirrorMode.CUSTOM && this.tempEnabled) {
+         graphics.text(this.font, CUSTOM_DOMAIN_LABEL, centerX - 150, 135, 0xFFFFFF);
       }
+   }
 
-      super.render(graphics, mouseX, mouseY, partialTick);
+   // mc261 使用 extractBackground 替代 renderBackground
+   public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+      graphics.fill(0, 0, this.width, this.height, -1072689136);
    }
 
    @Override

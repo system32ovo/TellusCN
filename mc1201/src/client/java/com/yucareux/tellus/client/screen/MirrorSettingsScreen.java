@@ -127,11 +127,13 @@ public class MirrorSettingsScreen extends Screen {
       int startY = 60;
       int lineHeight = 25;
 
-      // 启用镜像复选框
-      this.enableCheckbox = Checkbox.builder(ENABLE_MIRROR, this.font)
-         .pos(centerX - 150, startY)
-         .selected(this.tempEnabled)
-         .build();
+      // 启用镜像复选框 (1.20.1 使用旧版构造函数)
+      this.enableCheckbox = new Checkbox(
+         centerX - 150, startY,
+         20, 20,
+         ENABLE_MIRROR,
+         this.tempEnabled
+      );
       this.addRenderableWidget(this.enableCheckbox);
 
       // 模式选择按钮（官方预设 / 自定义）
@@ -212,7 +214,7 @@ public class MirrorSettingsScreen extends Screen {
 
    @Override
    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-      this.renderBackground(graphics, mouseX, mouseY, partialTick);
+      this.renderBackground(graphics);
 
       int centerX = this.width / 2;
 
