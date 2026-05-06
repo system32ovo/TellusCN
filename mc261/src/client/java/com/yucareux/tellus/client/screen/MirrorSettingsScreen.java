@@ -272,19 +272,4 @@ public class MirrorSettingsScreen extends Screen {
    public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
       graphics.fill(0, 0, this.width, this.height, -1072689136);
    }
-
-   @Override
-   public void resize(Minecraft minecraft, int width, int height) {
-      super.resize(minecraft, width, height);
-      this.init(); // 重新初始化以调整布局
-   }
-
-   @Override
-   public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-      if (keyCode == 256) { // ESC 键
-         this.onClose();
-         return true;
-      }
-      return super.keyPressed(keyCode, scanCode, modifiers);
-   }
 }
