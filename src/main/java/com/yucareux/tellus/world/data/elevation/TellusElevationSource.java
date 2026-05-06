@@ -2016,13 +2016,18 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private byte[] downloadTile(TellusElevationSource.TileKey key) throws IOException {
-      URI uri = URI.create(String.format("%s/%d/%d/%d.png", getEndpoint(), key.zoom(), key.x(), key.y()));
+      String endpoint = getEndpoint();
+      String url = String.format("%s/%d/%d/%d.png", endpoint, key.zoom(), key.x(), key.y());
+      Tellus.LOGGER.info("[TellusCN] Downloading elevation tile: {} from endpoint: {}", key, endpoint);
+      URI uri = URI.create(url);
       HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
       try {
          connection.setConnectTimeout(8000);
          connection.setReadTimeout(8000);
          connection.setRequestProperty("User-Agent", "Tellus/1.0 (Minecraft Mod)");
-         if (connection.getResponseCode() == 404) {
+         int responseCode = connection.getResponseCode();
+         Tellus.LOGGER.debug("[TellusCN] Elevation tile response: {} for {}", responseCode, url);
+         if (responseCode == 404) {
             return null;
          } else {
             DownloadProgressReporter.requestStarted(connection.getContentLengthLong());
@@ -2034,6 +2039,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
                DownloadProgressReporter.requestFinished();
             }
 
+            Tellus.LOGGER.info("[TellusCN] Downloaded elevation tile: {} ({} bytes)", key, var5.length);
             return var5;
          }
       } finally {

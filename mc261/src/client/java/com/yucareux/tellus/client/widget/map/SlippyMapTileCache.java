@@ -115,6 +115,7 @@ public class SlippyMapTileCache {
          return Files.readAllBytes(cachePath);
       } else {
          String tileUrl = getTileUrl(pos);
+         Tellus.LOGGER.info("[TellusCN] Downloading map tile: {} from URL: {}", pos, tileUrl);
          URI uri = URI.create(tileUrl);
          URL url = uri.toURL();
          HttpURLConnection connection = (HttpURLConnection)url.openConnection();
@@ -123,6 +124,7 @@ public class SlippyMapTileCache {
             connection.setReadTimeout(5000);
             connection.setRequestProperty("User-Agent", "Tellus/2.0.0 (Minecraft Mod)");
             int responseCode = connection.getResponseCode();
+            Tellus.LOGGER.debug("[TellusCN] Map tile response: {} for {}", responseCode, tileUrl);
             if (responseCode != 200) {
                throw new IOException("OpenStreetMap tile request failed with HTTP " + responseCode + " for " + pos);
             }
@@ -132,6 +134,7 @@ public class SlippyMapTileCache {
 
             try (InputStream input = new BufferedInputStream(stream)) {
                byte[] data = input.readAllBytes();
+               Tellus.LOGGER.info("[TellusCN] Downloaded map tile: {} ({} bytes)", pos, data.length);
                if (!this.shuttingDown && !Thread.currentThread().isInterrupted()) {
                   this.cacheData(cachePath, data);
                }
