@@ -56,7 +56,10 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
       TellusLandCoverSource.CoverBlendScratch::new
    );
    private static final String DEFAULT_ENDPOINT = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map";
-   private static final String ENDPOINT = TellusEndpointConfig.getLandCoverEndpoint(DEFAULT_ENDPOINT);
+   // 延迟初始化，确保配置已加载
+   private static String getEndpoint() {
+      return TellusEndpointConfig.getLandCoverEndpoint(DEFAULT_ENDPOINT);
+   }
    private static final String TILE_PATTERN = "ESA_WorldCover_10m_2021_v200_%s_Map.tif";
    private final Path cacheRoot = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/worldcover2021");
    private final LoadingCache<TellusLandCoverSource.TileKey, TellusLandCoverSource.GeoTiffTile> cache = CacheBuilder.newBuilder()
@@ -662,7 +665,7 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
    }
 
    private byte[] downloadTile(TellusLandCoverSource.TileKey key) throws IOException {
-      URI uri = URI.create(String.format("%s/%s", ENDPOINT, key.fileName()));
+      URI uri = URI.create(String.format("%s/%s", getEndpoint(), key.fileName()));
       HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
       try {
          connection.setConnectTimeout(8000);

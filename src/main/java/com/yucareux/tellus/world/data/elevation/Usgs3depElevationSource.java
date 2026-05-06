@@ -28,7 +28,10 @@ import net.minecraft.util.Mth;
 
 public final class Usgs3depElevationSource implements TellusCacheHandle {
    private static final String DEFAULT_ENDPOINT = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage";
-   private static final String ENDPOINT = TellusEndpointConfig.getUsgsEndpoint(DEFAULT_ENDPOINT);
+   // 延迟初始化，确保配置已加载
+   private static String getEndpoint() {
+      return TellusEndpointConfig.getUsgsEndpoint(DEFAULT_ENDPOINT);
+   }
    private static final int HTTP_CONNECT_TIMEOUT = 8000;
    private static final int HTTP_READ_TIMEOUT = 30000;
    private static final String HTTP_USER_AGENT = "Tellus/1.0 (Minecraft Mod)";
@@ -599,7 +602,7 @@ public final class Usgs3depElevationSource implements TellusCacheHandle {
          return String.format(
             Locale.ROOT,
             "%s?bbox=%.3f,%.3f,%.3f,%.3f&bboxSR=3857&imageSR=3857&size=%d,%d&format=tiff&pixelType=F32&interpolation=RSP_BilinearInterpolation&f=image",
-            ENDPOINT,
+            getEndpoint(),
             this.minX(),
             this.minY(),
             this.maxX(),

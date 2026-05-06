@@ -19,8 +19,13 @@ import java.util.List;
 
 public class NominatimGeocoder implements Geocoder {
    private static final String DEFAULT_BASE_URL = "https://nominatim.openstreetmap.org";
-   private static final String BASE_URL = TellusEndpointConfig.getGeocodingEndpoint(DEFAULT_BASE_URL);
-   private static final String SEARCH_URL = BASE_URL + "/search?format=json&limit=%d&q=%s";
+   // 延迟初始化，确保配置已加载
+   private static String getBaseUrl() {
+      return TellusEndpointConfig.getGeocodingEndpoint(DEFAULT_BASE_URL);
+   }
+   private static String getSearchUrl() {
+      return getBaseUrl() + "/search?format=json&limit=%d&q=%s";
+   }
    private static final int GET_LIMIT = 1;
    private static final int SUGGEST_LIMIT = 5;
    private static final int CONNECT_TIMEOUT_MS = 5000;
@@ -85,7 +90,7 @@ public class NominatimGeocoder implements Geocoder {
 
    private JsonElement query(String place, int limit) throws IOException {
       String encodedPlace = URLEncoder.encode(place, StandardCharsets.UTF_8);
-      URI uri = URI.create(String.format(SEARCH_URL, limit, encodedPlace));
+      URI uri = URI.create(String.format(getSearchUrl(), limit, encodedPlace));
       IOException lastError = null;
       int attempt = 0;
 

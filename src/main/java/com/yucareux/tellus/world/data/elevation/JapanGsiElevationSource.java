@@ -27,7 +27,10 @@ import net.minecraft.util.Mth;
 
 public final class JapanGsiElevationSource implements TellusCacheHandle {
    private static final String DEFAULT_BASE_ENDPOINT = "https://cyberjapandata.gsi.go.jp/xyz";
-   private static final String BASE_ENDPOINT = TellusEndpointConfig.getJapanGsiEndpoint(DEFAULT_BASE_ENDPOINT);
+   // 延迟初始化，确保配置已加载
+   private static String getBaseEndpoint() {
+      return TellusEndpointConfig.getJapanGsiEndpoint(DEFAULT_BASE_ENDPOINT);
+   }
    private static final int HTTP_CONNECT_TIMEOUT = 8000;
    private static final int HTTP_READ_TIMEOUT = 8000;
    private static final String HTTP_USER_AGENT = "Tellus/1.0 (Minecraft Mod)";
@@ -556,7 +559,7 @@ public final class JapanGsiElevationSource implements TellusCacheHandle {
       }
 
       private String url() {
-         return BASE_ENDPOINT + "/" + this.layer.pathSegment() + "/" + this.zoom + "/" + this.x + "/" + this.y + ".png";
+         return getBaseEndpoint() + "/" + this.layer.pathSegment() + "/" + this.zoom + "/" + this.x + "/" + this.y + ".png";
       }
 
       private Path cachePath(Path cacheRoot) {

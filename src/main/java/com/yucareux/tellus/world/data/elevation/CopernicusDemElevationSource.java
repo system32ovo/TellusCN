@@ -34,8 +34,13 @@ import net.minecraft.util.Mth;
 public final class CopernicusDemElevationSource implements TellusCacheHandle {
    private static final String DEFAULT_GLO_30_BASE_URL = "https://copernicus-dem-30m.s3.eu-central-1.amazonaws.com";
    private static final String DEFAULT_GLO_90_BASE_URL = "https://copernicus-dem-90m.s3.eu-central-1.amazonaws.com";
-   private static final String GLO_30_BASE_URL = TellusEndpointConfig.getCopernicus30Endpoint(DEFAULT_GLO_30_BASE_URL);
-   private static final String GLO_90_BASE_URL = TellusEndpointConfig.getCopernicus90Endpoint(DEFAULT_GLO_90_BASE_URL);
+   // 延迟初始化，确保配置已加载
+   private static String getGlo30BaseUrl() {
+      return TellusEndpointConfig.getCopernicus30Endpoint(DEFAULT_GLO_30_BASE_URL);
+   }
+   private static String getGlo90BaseUrl() {
+      return TellusEndpointConfig.getCopernicus90Endpoint(DEFAULT_GLO_90_BASE_URL);
+   }
    private static final int HTTP_CONNECT_TIMEOUT = 8000;
    private static final int HTTP_READ_TIMEOUT = 8000;
    private static final String HTTP_USER_AGENT = "Tellus/1.0 (Minecraft Mod)";
@@ -949,17 +954,22 @@ public final class CopernicusDemElevationSource implements TellusCacheHandle {
    }
 
    private static enum Level {
-      GLO_30("10", 3600, GLO_30_BASE_URL),
-      GLO_90("30", 1200, GLO_90_BASE_URL);
+      GLO_30("10", 3600),
+      GLO_90("30", 1200);
 
       private final String productCode;
       private final int samplesPerDegree;
-      private final String baseUrl;
 
-      private Level(String productCode, int samplesPerDegree, String baseUrl) {
+      private Level(String productCode, int samplesPerDegree) {
          this.productCode = productCode;
          this.samplesPerDegree = samplesPerDegree;
-         this.baseUrl = baseUrl;
+      }
+      
+      String getBaseUrl() {
+         return switch (this) {
+            case GLO_30 -> getGlo30BaseUrl();
+            case GLO_90 -> getGlo90BaseUrl();
+         };
       }
    }
 
@@ -988,7 +998,7 @@ public final class CopernicusDemElevationSource implements TellusCacheHandle {
             ew,
             lon
          );
-         return this.level.baseUrl + "/" + name + "/" + name + ".tif";
+         return this.level.getBaseUrl() + "/" + name + "/" + name + ".tif";
       }
    }
 }

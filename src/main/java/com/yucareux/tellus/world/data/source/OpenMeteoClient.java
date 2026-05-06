@@ -25,7 +25,10 @@ public final class OpenMeteoClient {
    private static final float TEMP_MELT_THRESHOLD = 2.0F;
    private static final String USER_AGENT = "Tellus/1.0 (open-meteo.com)";
    private static final String DEFAULT_BASE_URL = "https://api.open-meteo.com/v1";
-   private static final String BASE_URL = TellusEndpointConfig.getWeatherEndpoint(DEFAULT_BASE_URL);
+   // 延迟初始化，确保配置已加载
+   private static String getBaseUrl() {
+      return TellusEndpointConfig.getWeatherEndpoint(DEFAULT_BASE_URL);
+   }
 
    public OpenMeteoClient.WeatherPointData fetch(double latitude, double longitude) throws IOException {
       String url = buildUrl(latitude, longitude);
@@ -122,7 +125,7 @@ public final class OpenMeteoClient {
       return String.format(
          Locale.ROOT,
          "%s/forecast?latitude=%.5f&longitude=%.5f&current=weather_code,temperature_2m,precipitation,snowfall&hourly=temperature_2m,snowfall&past_days=%d&forecast_days=1&timezone=auto",
-         BASE_URL,
+         getBaseUrl(),
          latitude,
          longitude,
          historyDays()
