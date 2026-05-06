@@ -154,14 +154,6 @@ public class EarthCustomizeScreen extends Screen {
 
       int buttonY = this.height - 28;
       
-      // 镜像设置按钮（中国玩家专用）- 放在左侧
-      Component mirrorLabel = Objects.requireNonNull(Component.translatable("tellus.customize.mirror_settings"), "mirrorLabel");
-      this.addRenderableWidget(Button.builder(mirrorLabel, button -> {
-         if (this.minecraft != null) {
-            this.minecraft.setScreen(new MirrorSettingsScreen(this));
-         }
-      }).bounds(this.width / 2 - 155 - 160, buttonY, 150, 20).build());
-      
       // 出生点设置按钮
       Component spawnpointLabel = Objects.requireNonNull(Component.translatable("gui.earth.spawnpoint"), "spawnpointLabel");
       this.addRenderableWidget(Button.builder(spawnpointLabel, button -> {
@@ -1464,6 +1456,15 @@ public class EarthCustomizeScreen extends Screen {
             this.list.addWidget(button);
          }
       }
+
+      // 添加镜像设置按钮（中国玩家专用）
+      Component mirrorLabel = Component.translatable("tellus.customize.mirror_settings");
+      Button mirrorButton = Button.builder(mirrorLabel, btn -> {
+         if (this.minecraft != null) {
+            this.minecraft.setScreen(new MirrorSettingsScreen(this));
+         }
+      }).bounds(0, 0, this.list.getRowWidth(), 20).build();
+      this.list.addWidget(mirrorButton);
 
       this.list.setScrollAmount(0.0);
    }

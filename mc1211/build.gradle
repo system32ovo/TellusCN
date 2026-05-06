@@ -30,12 +30,6 @@ repositories {
 			includeGroup 'maven.modrinth'
 		}
 	}
-	maven {
-		url = 'https://maven.terraformersmc.com/'
-		content {
-			includeGroup 'com.terraformersmc'
-		}
-	}
 }
 
 loom {
@@ -89,9 +83,6 @@ dependencies {
 	if (distantHorizonsRuntimePath) {
 		runtimeOnly files(distantHorizonsRuntimePath)
 	}
-
-	// Mod Menu integration (optional)
-	modCompileOnly "com.terraformersmc:modmenu:11.0.3"
 }
 
 processResources {

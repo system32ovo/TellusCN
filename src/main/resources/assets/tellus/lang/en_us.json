@@ -211,5 +211,18 @@
   "property.tellus.enable_water.tooltip": "Use Overture/OSM water when enabled. Leave off to keep ESA water",
   "tellus.openstreetmaps_features.scale_limit_warning": "Roads and buildings are disabled because they are only available when World Scale is 1:15 (15 m/block) or finer.",
   "property.tellus.enable_roads.scale_limit.tooltip": "Disabled because roads are only available when World Scale is 1:15 (15 m/block) or finer.",
-  "property.tellus.enable_buildings.scale_limit.tooltip": "Disabled because buildings are only available when World Scale is 1:15 (15 m/block) or finer."
+  "property.tellus.enable_buildings.scale_limit.tooltip": "Disabled because buildings are only available when World Scale is 1:15 (15 m/block) or finer.",
+  "tellus.customize.mirror_settings": "Mirror Settings (China Users)",
+  "tellus.mirror_settings.title": "TellusCN Mirror Settings",
+  "tellus.mirror_settings.description": "Configure domestic mirror nodes to resolve slow data source access",
+  "tellus.mirror_settings.enable": "Enable Mirror",
+  "tellus.mirror_settings.use_official": "Use Official Preset",
+  "tellus.mirror_settings.use_custom": "Use Custom Domain",
+  "tellus.mirror_settings.custom_domain": "Custom Workers Domain",
+  "tellus.mirror_settings.custom_domain_hint": "e.g.: https://tellus-mirror.example.workers.dev",
+  "tellus.mirror_settings.current_status": "Current Status",
+  "tellus.mirror_settings.status_enabled": "Enabled",
+  "tellus.mirror_settings.status_disabled": "Disabled",
+  "tellus.mirror_settings.save": "Save Settings",
+  "tellus.mirror_settings.back": "Back"
 }

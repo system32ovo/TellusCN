@@ -211,5 +211,18 @@
   "property.tellus.enable_water.tooltip": "Usa agua de Overture/OSM cuando está activado. Déjalo desactivado para mantener el agua ESA",
   "tellus.openstreetmaps_features.scale_limit_warning": "Las carreteras y los edificios están desactivados porque solo están disponibles cuando la escala del mundo es 1:15 (15 m/bloque) o más detallada.",
   "property.tellus.enable_roads.scale_limit.tooltip": "Desactivado porque las carreteras solo están disponibles cuando la escala del mundo es 1:15 (15 m/bloque) o más detallada.",
-  "property.tellus.enable_buildings.scale_limit.tooltip": "Desactivado porque los edificios solo están disponibles cuando la escala del mundo es 1:15 (15 m/bloque) o más detallada."
+  "property.tellus.enable_buildings.scale_limit.tooltip": "Desactivado porque los edificios solo están disponibles cuando la escala del mundo es 1:15 (15 m/bloque) o más detallada.",
+  "tellus.customize.mirror_settings": "Configuración de Espejo (Usuarios de China)",
+  "tellus.mirror_settings.title": "Configuración de Espejo TellusCN",
+  "tellus.mirror_settings.description": "Configura nodos de espejo domésticos para resolver el acceso lento a fuentes de datos",
+  "tellus.mirror_settings.enable": "Activar Espejo",
+  "tellus.mirror_settings.use_official": "Usar Preajuste Oficial",
+  "tellus.mirror_settings.use_custom": "Usar Dominio Personalizado",
+  "tellus.mirror_settings.custom_domain": "Dominio Workers Personalizado",
+  "tellus.mirror_settings.custom_domain_hint": "ej.: https://tellus-mirror.example.workers.dev",
+  "tellus.mirror_settings.current_status": "Estado Actual",
+  "tellus.mirror_settings.status_enabled": "Activado",
+  "tellus.mirror_settings.status_disabled": "Desactivado",
+  "tellus.mirror_settings.save": "Guardar Configuración",
+  "tellus.mirror_settings.back": "Atrás"
 }
