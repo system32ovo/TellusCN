@@ -42,7 +42,10 @@ public final class TellusElevationSource implements TellusCacheHandle {
    private static final double POLAR_SOUTH_MAX_LAT = -60.0;
    private static final double RESOLUTION_METERS = 30.0;
    private static final String DEFAULT_ENDPOINT = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
-   private static final String ENDPOINT = TellusEndpointConfig.getElevationEndpoint(DEFAULT_ENDPOINT);
+   // 延迟初始化，确保配置已加载
+   private static String getEndpoint() {
+      return TellusEndpointConfig.getElevationEndpoint(DEFAULT_ENDPOINT);
+   }
    private static final int MAX_CACHE_TILES = intProperty("tellus.elevation.cacheTiles", 512);
    // The normalized cache currently incurs a very expensive first-build path on cache misses.
    // Keep it opt-in until the ingest/build cost is low enough for preview and spawn-time terrain reads.
@@ -2013,7 +2016,7 @@ public final class TellusElevationSource implements TellusCacheHandle {
    }
 
    private byte[] downloadTile(TellusElevationSource.TileKey key) throws IOException {
-      URI uri = URI.create(String.format("%s/%d/%d/%d.png", ENDPOINT, key.zoom(), key.x(), key.y()));
+      URI uri = URI.create(String.format("%s/%d/%d/%d.png", getEndpoint(), key.zoom(), key.x(), key.y()));
       HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
       try {
          connection.setConnectTimeout(8000);
