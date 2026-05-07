@@ -1,6 +1,6 @@
-# Tellus
+# TellusCN
 
-Tellus is a Fabric mod that recreates real-world terrain in Minecraft by generating Earth-scale landscapes from geographic data. It focuses on realistic elevation, biome placement, and climate-driven time and weather, aiming to make the world feel like a playable map of our planet.
+TellusCN is a community fork of the Fabric mod [Tellus](https://modrinth.com/mod/tellus), optimized for Chinese players. that recreates real-world terrain in Minecraft by generating Earth-scale landscapes from geographic data. It focuses on realistic elevation, biome placement, and climate-driven time and weather, aiming to make the world feel like a playable map of our planet.
 
 ## Copyright
 
