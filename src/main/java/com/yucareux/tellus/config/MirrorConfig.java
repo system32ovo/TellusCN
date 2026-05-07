@@ -41,11 +41,11 @@ public final class MirrorConfig {
    
    // 官方预设 Workers 域名（国内加速）
    public static final String[] OFFICIAL_PRESETS = {
-      "https://telluscn-cdn.lga3545.deno.net",  // Deno Deploy 官方节点
+      "https://telluscn.ggff.net",  // Cloudflare Workers 官方节点
    };
    
    // 当前配置
-   private static volatile boolean enabled = false;
+   private static volatile boolean enabled = true;
    private static volatile String customDomain = "";
    private static volatile int selectedPreset = 0;
    private static volatile boolean loaded = false;
@@ -175,7 +175,7 @@ public final class MirrorConfig {
       try (InputStream input = Files.newInputStream(CONFIG_PATH)) {
          props.load(input);
          
-         enabled = Boolean.parseBoolean(props.getProperty(KEY_ENABLED, "false"));
+         enabled = Boolean.parseBoolean(props.getProperty(KEY_ENABLED, "true"));
          customDomain = normalize(props.getProperty(KEY_CUSTOM_DOMAIN, ""));
          selectedPreset = Integer.parseInt(props.getProperty(KEY_SELECTED_PRESET, "0"));
          
