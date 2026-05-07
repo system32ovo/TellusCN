@@ -1,15 +1,16 @@
 {
 	"schemaVersion": 1,
-	"id": "tellus",
+	"id": "telluscn",
 	"version": "${version}",
-	"name": "Tellus",
-	"description": "Tellus is a Fabric mod that recreates real-world terrain in Minecraft by generating Earth-scale landscapes from geographic data.",
+	"name": "TellusCN",
+	"description": "TellusCN is a Chinese mirror optimized version of Tellus mod. Tellus recreates real-world terrain in Minecraft by generating Earth-scale landscapes from geographic data. This version includes optimized data source access for Chinese users.",
 	"authors": [
-		"Me!"
+		"BlackHoleEra-Team",
+		"Yucareux (Original Author)"
 	],
 	"contact": {
-		"homepage": "https://github.com/Yucareux/Tellus",
-		"sources": "https://github.com/Yucareux/Tellus"
+		"homepage": "https://github.com/system32ovo/TellusCN",
+		"sources": "https://github.com/system32ovo/TellusCN"
 	},
 	"license": "LGPL-3.0-only",
 	"icon": "assets/tellus/icon.png",

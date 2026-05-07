@@ -3,7 +3,7 @@ plugins {
 }
 
 group = project.maven_group
-version = project.mod_version
+version = project.mod_version + "-Tellus" + project.tellus_version
 
 subprojects {
 	group = rootProject.group
