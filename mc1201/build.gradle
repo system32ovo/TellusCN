@@ -18,7 +18,7 @@ def overriddenSharedMainSources = [
 def sharedMainJavaPath = rootProject.file('src/main/java').toPath().toAbsolutePath().normalize()
 
 base {
-	archivesName = "${rootProject.archives_base_name}-fabric-${minecraftVersion}"
+	archivesName = "${rootProject.archives_base_name}-${minecraftVersion}-${rootProject.mod_version}"
 }
 
 configurations {

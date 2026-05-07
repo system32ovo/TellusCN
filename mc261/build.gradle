@@ -11,7 +11,7 @@ def javaVersion = 25
 def distantHorizonsRuntimePath = providers.gradleProperty('mc261_distant_horizons_runtime_path').orNull
 
 base {
-	archivesName = "${rootProject.archives_base_name}-fabric-${minecraftVersion}"
+	archivesName = "${rootProject.archives_base_name}-${minecraftVersion}-${rootProject.mod_version}"
 }
 
 configurations {
