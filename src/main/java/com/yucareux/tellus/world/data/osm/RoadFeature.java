@@ -10,6 +10,11 @@ public final class RoadFeature {
    private final RoadMode mode;
    private final int bridgeLevel;
    private final String highwayTag;
+   private final String roadSurface;
+   private final String subclass;
+   private final double widthMeters;
+   private final int lanes;
+   private final boolean laneMarkings;
    private final double[] longitudes;
    private final double[] latitudes;
    private final double minLon;
@@ -17,14 +22,51 @@ public final class RoadFeature {
    private final double minLat;
    private final double maxLat;
 
-   public RoadFeature(long wayId,  RoadClass roadClass,  RoadMode mode, int bridgeLevel, String highwayTag, double[] longitudes, double[] latitudes) {
+   public RoadFeature(long wayId, RoadClass roadClass, RoadMode mode, int bridgeLevel, String highwayTag, double[] longitudes, double[] latitudes) {
+      this(wayId, roadClass, mode, bridgeLevel, highwayTag, null, null, 0.0, longitudes, latitudes);
+   }
+
+   public RoadFeature(
+      long wayId,
+      RoadClass roadClass,
+      RoadMode mode,
+      int bridgeLevel,
+      String highwayTag,
+      String roadSurface,
+      String subclass,
+      double widthMeters,
+      double[] longitudes,
+      double[] latitudes
+   ) {
+      this(wayId, roadClass, mode, bridgeLevel, highwayTag, roadSurface, subclass, widthMeters, 0, true, longitudes, latitudes);
+   }
+
+   public RoadFeature(
+      long wayId,
+      RoadClass roadClass,
+      RoadMode mode,
+      int bridgeLevel,
+      String highwayTag,
+      String roadSurface,
+      String subclass,
+      double widthMeters,
+      int lanes,
+      boolean laneMarkings,
+      double[] longitudes,
+      double[] latitudes
+   ) {
       this.wayId = wayId;
       this.roadClass = Objects.requireNonNull(roadClass, "roadClass");
       this.mode = Objects.requireNonNull(mode, "mode");
       this.bridgeLevel = Math.max(0, bridgeLevel);
       this.highwayTag = normalizeHighwayTag(highwayTag);
-      this.longitudes = Objects.requireNonNull(longitudes, "longitudes");
-      this.latitudes = Objects.requireNonNull(latitudes, "latitudes");
+      this.roadSurface = RoadSurfaceStyle.normalizeSurface(roadSurface);
+      this.subclass = RoadSurfaceStyle.normalizeSubclass(subclass);
+      this.widthMeters = RoadSurfaceStyle.normalizeWidthMeters(widthMeters);
+      this.lanes = RoadSurfaceStyle.normalizeLaneCount(lanes);
+      this.laneMarkings = laneMarkings;
+	      this.longitudes = Objects.requireNonNull(longitudes, "longitudes").clone();
+	      this.latitudes = Objects.requireNonNull(latitudes, "latitudes").clone();
       if (this.longitudes.length == this.latitudes.length && this.longitudes.length >= 2) {
          double lowLon = Double.POSITIVE_INFINITY;
          double highLon = Double.NEGATIVE_INFINITY;
@@ -53,12 +95,10 @@ public final class RoadFeature {
       return this.wayId;
    }
 
-   
    public RoadClass roadClass() {
       return this.roadClass;
    }
 
-   
    public RoadMode mode() {
       return this.mode;
    }
@@ -69,6 +109,26 @@ public final class RoadFeature {
 
    public String highwayTag() {
       return this.highwayTag;
+   }
+
+   public String roadSurface() {
+      return this.roadSurface;
+   }
+
+   public String subclass() {
+      return this.subclass;
+   }
+
+   public double widthMeters() {
+      return this.widthMeters;
+   }
+
+   public int lanes() {
+      return this.lanes;
+   }
+
+   public boolean laneMarkings() {
+      return this.laneMarkings;
    }
 
    public boolean matchesHighwayTag(String highwayTag) {

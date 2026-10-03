@@ -1,0 +1,16 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+	id 'net.neoforged.moddev' version '2.0.141'
+	id 'com.gradleup.shadow' version '9.0.0'
+}
+
+ext.tellus = [
+	minecraftVersion: '1.21.1',
+	neoForgeVersion: '21.1.238',
+	javaVersion: 21,
+	distantHorizonsRuntimeProperty: 'mc1211_neoforge_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'pre-26', 'mc1211', 'forge-family', 'pre-26-forge', 'neoforge'],
+]
+
+apply from: rootProject.file('gradle/tellus-neoforge.gradle')

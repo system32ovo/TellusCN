@@ -22,6 +22,8 @@ public final class MountainSurfaceRules {
    public static int resolveSurfaceCoverClass(int terrainCoverClass, int visualCoverClass) {
       if (terrainCoverClass == ESA_BUILT) {
          return ESA_BUILT;
+      } else if (terrainCoverClass == ESA_TREE_COVER) {
+         return ESA_TREE_COVER;
       } else {
          return !isWaterLikeCoverClass(terrainCoverClass) && !isWaterLikeCoverClass(visualCoverClass) ? visualCoverClass : terrainCoverClass;
       }
@@ -100,19 +102,32 @@ public final class MountainSurfaceRules {
          || coverClass == ESA_MOSS_LICHEN;
    }
 
+   /**
+    * Keeps distinctive biome materials authoritative over generic land-cover mountain materials.
+    * ESA bare ground describes vegetation cover, so it must not turn elevated desert sand into stone.
+    */
+   public static boolean preservesBiomeSurfacePalette(boolean desertBiome, boolean badlandsBiome) {
+      return desertBiome || badlandsBiome;
+   }
+
    public static boolean isMountainRockyCover(int coverClass, int heightAboveSea) {
+      // Keep vegetated land cover authoritative here. The generator can still
+      // expose stone locally through its steep-slope surface fallback.
       return coverClass == ESA_NO_DATA
          ? heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA
-         : coverClass == ESA_SNOW_ICE || coverClass == ESA_BARE || coverClass == ESA_SHRUBLAND || coverClass == ESA_MOSS_LICHEN;
+         : coverClass == ESA_SNOW_ICE || coverClass == ESA_BARE;
    }
 
    public static boolean qualifiesForMountainPalette(int coverClass, int heightAboveSea, int slopeDiff, int convexity) {
-      if (!isMountainRockyCover(coverClass, heightAboveSea)) {
+      int ruggedness = slopeDiff + Math.max(0, -convexity);
+      if (coverClass == ESA_NO_DATA) {
+         return heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA
+            || heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && (slopeDiff >= 3 || ruggedness >= 5);
+      } else if (!isMountainRockyCover(coverClass, heightAboveSea)) {
          return false;
       } else if (coverClass == ESA_SNOW_ICE || heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA) {
          return true;
       } else {
-         int ruggedness = slopeDiff + Math.max(0, -convexity);
          return heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA || slopeDiff >= 3 || ruggedness >= 5;
       }
    }
@@ -135,66 +150,242 @@ public final class MountainSurfaceRules {
    public static MountainSurfaceRules.ApproximateSurface classifyApproximateSurface(
       int terrainCoverClass, int visualCoverClass, int heightAboveSea, int slopeDiff, int convexity, boolean snowLikeTerrain
    ) {
+      return classifyApproximateSurface(terrainCoverClass, visualCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain, 0, 0);
+   }
+
+   public static MountainSurfaceRules.ApproximateSurface classifyApproximateSurface(
+      int terrainCoverClass,
+      int visualCoverClass,
+      int heightAboveSea,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      int worldX,
+      int worldZ
+   ) {
       int surfaceCoverClass = resolveSurfaceCoverClass(terrainCoverClass, visualCoverClass);
-      if (snowLikeTerrain || surfaceCoverClass == ESA_SNOW_ICE) {
-         if (snowLikeTerrain || retainsApproximateSnow(heightAboveSea, slopeDiff, convexity)) {
-            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.SNOW);
+      float vegetationTransitionWeight = vegetationTransitionWeightForSurfaceCoverClass(surfaceCoverClass, heightAboveSea);
+      return classifyApproximateSurface(
+         terrainCoverClass, visualCoverClass, heightAboveSea, slopeDiff, convexity, snowLikeTerrain, vegetationTransitionWeight, worldX, worldZ
+      );
+   }
+
+   public static MountainSurfaceRules.ApproximateSurface classifyApproximateSurface(
+      int terrainCoverClass,
+      int visualCoverClass,
+      int heightAboveSea,
+      int slopeDiff,
+      int convexity,
+      boolean snowLikeTerrain,
+      float vegetationTransitionWeight,
+      int worldX,
+      int worldZ
+   ) {
+      int surfaceCoverClass = resolveSurfaceCoverClass(terrainCoverClass, visualCoverClass);
+      boolean snowSource = hasSnowSource(surfaceCoverClass, snowLikeTerrain);
+      if (snowSource) {
+         if (retainsMountainSnow(surfaceCoverClass, snowLikeTerrain, heightAboveSea, slopeDiff, convexity, worldX, worldZ)) {
+            return new MountainSurfaceRules.ApproximateSurface(
+               surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.SNOW, MountainSurfaceRules.MountainForm.SNOWFIELD
+            );
          }
       }
 
-      if (!qualifiesForMountainPalette(surfaceCoverClass, heightAboveSea, slopeDiff, convexity)) {
-         return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.NONE);
+      boolean mountainCandidate = snowSource
+         || qualifiesForMountainPalette(surfaceCoverClass, heightAboveSea, slopeDiff, convexity);
+      if (!mountainCandidate) {
+         MountainSurfaceRules.MountainForm form = heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA
+               && isVegetatedCoverClass(surfaceCoverClass)
+               && slopeDiff <= 2
+            ? MountainSurfaceRules.MountainForm.ALPINE_MEADOW
+            : MountainSurfaceRules.MountainForm.NONE;
+         return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.NONE, form);
       } else {
-         int ruggedness = slopeDiff + Math.max(0, -convexity);
-         boolean exposedHeadwall = ruggedness >= 7 && slopeDiff >= 4 && convexity <= 0;
-         if (slopeDiff >= 6 || slopeDiff >= 5 && convexity >= 1) {
-            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.DEEPSLATE_SCREE);
-         } else if (slopeDiff >= 4 && convexity >= 1) {
-            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.DEEPSLATE_TALUS);
-         } else if (heightAboveSea >= 190 && exposedHeadwall && ruggedness >= 9) {
-            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.WEATHERED_ANDESITE);
+         MountainSurfaceRules.MountainForm form = classifyMountainForm(
+            surfaceCoverClass, heightAboveSea, slopeDiff, convexity, worldX, worldZ
+         );
+         if (snowSource && prefersSnowStreak(surfaceCoverClass, snowLikeTerrain, heightAboveSea, slopeDiff, convexity, worldX, worldZ, form)) {
+            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.SNOW_STREAK, form);
          } else {
-            return heightAboveSea >= 170 && exposedHeadwall && ruggedness >= 8
-               ? new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.TUFF)
-               : new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.DEEPSLATE);
+            return new MountainSurfaceRules.ApproximateSurface(surfaceCoverClass, MountainSurfaceRules.ApproximatePalette.STONE, form);
          }
       }
    }
 
-   private static boolean retainsApproximateSnow(int heightAboveSea, int slopeDiff, int convexity) {
-      if (heightAboveSea < SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA) {
+   public static boolean hasSnowSource(int surfaceCoverClass, boolean snowLikeTerrain) {
+      return snowLikeTerrain || surfaceCoverClass == ESA_SNOW_ICE;
+   }
+
+   public static boolean retainsMountainSnow(
+      int surfaceCoverClass, boolean snowLikeTerrain, int heightAboveSea, int slopeDiff, int convexity, int worldX, int worldZ
+   ) {
+      if (!hasSnowSource(surfaceCoverClass, snowLikeTerrain)) {
          return false;
       } else {
-         int score = 52;
-         score += Math.max(0, (heightAboveSea - 150) / 3);
-         score -= slopeDiff * 12;
-         score += Math.max(-16, Math.min(20, convexity * 10));
-         if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA) {
-            score += 10;
-         }
-
-         return score >= 54;
+         return approximateSnowRetentionScore(heightAboveSea, slopeDiff, convexity, worldX, worldZ) >= 52;
       }
+   }
+
+   public static boolean prefersSnowStreak(
+      int surfaceCoverClass,
+      boolean snowLikeTerrain,
+      int heightAboveSea,
+      int slopeDiff,
+      int convexity,
+      int worldX,
+      int worldZ,
+      MountainSurfaceRules.MountainForm form
+   ) {
+      if (!hasSnowSource(surfaceCoverClass, snowLikeTerrain)
+         || retainsMountainSnow(surfaceCoverClass, snowLikeTerrain, heightAboveSea, slopeDiff, convexity, worldX, worldZ)
+         || heightAboveSea < SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA
+         || slopeDiff < 3) {
+         return false;
+      } else {
+         int score = slopeDiff * 11;
+         score += Math.max(0, convexity) * 12;
+         score += Math.max(0, (heightAboveSea - SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA) / 3);
+         score += (int)Math.round((approximateMask(worldX, worldZ, 72, 8361902749107219433L) - 0.38) * 62.0);
+         score += form == MountainSurfaceRules.MountainForm.DRAINAGE_CHUTE ? 24 : 0;
+         score += form == MountainSurfaceRules.MountainForm.CLIFF_FACE ? 10 : 0;
+         return score >= 68;
+      }
+   }
+
+   public static boolean prefersMountainStonePatch(
+      int surfaceCoverClass, int heightAboveSea, int slopeDiff, int convexity, float vegetationTransitionWeight, int worldX, int worldZ
+   ) {
+      if (!qualifiesForMountainPalette(surfaceCoverClass, heightAboveSea, slopeDiff, convexity)
+         || heightAboveSea < SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA
+         || slopeDiff < 2) {
+         return false;
+      } else {
+         int ruggedness = slopeDiff + Math.max(0, -convexity);
+         double scarMask = approximateMask(worldX + heightAboveSea * 2, worldZ - heightAboveSea, 160, 6792168434296017429L);
+         double breakMask = approximateMask(worldX - heightAboveSea, worldZ + heightAboveSea * 2, 52, 2145517839928346117L);
+         int score = -38;
+         score += ruggedness * 8;
+         score += Math.max(0, (heightAboveSea - SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA) / 4);
+         score += convexity <= 0 ? 10 : -4;
+         score -= Math.round(vegetationTransitionWeight * 34.0F);
+         score += (int)Math.round((scarMask - 0.44) * 76.0);
+         score += (int)Math.round((breakMask - 0.5) * 24.0);
+         return score >= 34;
+      }
+   }
+
+   private static int approximateSnowRetentionScore(int heightAboveSea, int slopeDiff, int convexity, int worldX, int worldZ) {
+      int score = 58;
+      score += Math.max(-12, Math.min(34, (heightAboveSea - 110) / 2));
+      score -= slopeDiff * 13;
+      score += Math.max(-20, Math.min(26, convexity * 10));
+      score += (int)Math.round((approximateMask(worldX, worldZ, 112, 3476291847715014363L) - 0.5) * 24.0);
+      if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA) {
+         score += 6;
+      }
+
+      if (slopeDiff <= 1 && convexity >= -1) {
+         score += 12;
+      } else if (slopeDiff >= 5) {
+         score -= 14;
+      }
+
+      return Math.max(0, Math.min(100, score));
+   }
+
+   private static MountainSurfaceRules.MountainForm classifyMountainForm(
+      int surfaceCoverClass, int heightAboveSea, int slopeDiff, int convexity, int worldX, int worldZ
+   ) {
+      int ruggedness = slopeDiff + Math.max(0, -convexity);
+      double drainageMask = approximateMask(worldX, worldZ, 80, 8361902749107219433L);
+      double cliffMask = approximateMask(worldX, worldZ, 144, 5516042115276107717L);
+      if (surfaceCoverClass == ESA_SNOW_ICE && heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA && slopeDiff <= 3 && convexity >= -1) {
+         return MountainSurfaceRules.MountainForm.SNOWFIELD;
+      } else if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA + 20 && slopeDiff <= 2 && convexity >= 1) {
+         return MountainSurfaceRules.MountainForm.GLACIER_BASIN;
+      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 4 && convexity >= 1 && drainageMask > 0.66) {
+         return MountainSurfaceRules.MountainForm.DRAINAGE_CHUTE;
+      } else if (slopeDiff >= 6 || ruggedness >= 9 && cliffMask > 0.28) {
+         return MountainSurfaceRules.MountainForm.CLIFF_FACE;
+      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 4 && convexity >= 1) {
+         return MountainSurfaceRules.MountainForm.TALUS_SLOPE;
+      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && slopeDiff >= 5) {
+         return MountainSurfaceRules.MountainForm.STEEP_ROCKY_SLOPE;
+      } else if (heightAboveSea >= SURFACE_ALPINE_HEIGHT_ABOVE_SEA && convexity <= -2 && slopeDiff >= 2) {
+         return MountainSurfaceRules.MountainForm.RIDGE;
+      } else if (heightAboveSea >= SURFACE_HIGHLAND_HEIGHT_ABOVE_SEA && isVegetatedCoverClass(surfaceCoverClass) && slopeDiff <= 2) {
+         return MountainSurfaceRules.MountainForm.ALPINE_MEADOW;
+      } else {
+         return MountainSurfaceRules.MountainForm.VALLEY_WALL;
+      }
+   }
+
+   private static double approximateMask(int worldX, int worldZ, int cellSize, long salt) {
+      int cellX = Math.floorDiv(worldX, cellSize);
+      int cellZ = Math.floorDiv(worldZ, cellSize);
+      double fracX = (double)Math.floorMod(worldX, cellSize) / (double)cellSize;
+      double fracZ = (double)Math.floorMod(worldZ, cellSize) / (double)cellSize;
+      double v00 = approximateCellNoise(cellX, cellZ, salt);
+      double v10 = approximateCellNoise(cellX + 1, cellZ, salt);
+      double v01 = approximateCellNoise(cellX, cellZ + 1, salt);
+      double v11 = approximateCellNoise(cellX + 1, cellZ + 1, salt);
+      double i0 = lerp(fracX, v00, v10);
+      double i1 = lerp(fracX, v01, v11);
+      return lerp(fracZ, i0, i1);
+   }
+
+   private static double approximateCellNoise(int cellX, int cellZ, long salt) {
+      long seed = salt ^ cellX * 341873128712L ^ cellZ * 132897987541L;
+      seed ^= seed >>> 33;
+      seed *= -49064778989728563L;
+      seed ^= seed >>> 33;
+      seed *= -4265267296055464877L;
+      seed ^= seed >>> 33;
+      long bits = seed >>> 11 & 9007199254740991L;
+      return bits / 9.007199E15F;
+   }
+
+   private static double lerp(double delta, double start, double end) {
+      return start + delta * (end - start);
    }
 
    public static enum ApproximatePalette {
       NONE,
       SNOW,
-      DEEPSLATE,
-      DEEPSLATE_SCREE,
-      DEEPSLATE_TALUS,
-      WEATHERED_ANDESITE,
-      TUFF;
+      SNOW_STREAK,
+      STONE;
    }
 
-   public record ApproximateSurface(int surfaceCoverClass, MountainSurfaceRules.ApproximatePalette palette) {
+   public record ApproximateSurface(
+      int surfaceCoverClass, MountainSurfaceRules.ApproximatePalette palette, MountainSurfaceRules.MountainForm form
+   ) {
+      public ApproximateSurface(int surfaceCoverClass, MountainSurfaceRules.ApproximatePalette palette) {
+         this(surfaceCoverClass, palette, MountainSurfaceRules.MountainForm.NONE);
+      }
+
       public boolean isMountain() {
-         return this.palette != MountainSurfaceRules.ApproximatePalette.NONE && this.palette != MountainSurfaceRules.ApproximatePalette.SNOW;
+         return this.palette != MountainSurfaceRules.ApproximatePalette.NONE
+            && this.palette != MountainSurfaceRules.ApproximatePalette.SNOW
+            && this.palette != MountainSurfaceRules.ApproximatePalette.SNOW_STREAK;
       }
 
       public boolean isSnow() {
-         return this.palette == MountainSurfaceRules.ApproximatePalette.SNOW;
+         return this.palette == MountainSurfaceRules.ApproximatePalette.SNOW
+            || this.palette == MountainSurfaceRules.ApproximatePalette.SNOW_STREAK;
       }
+   }
+
+   public static enum MountainForm {
+      NONE,
+      RIDGE,
+      CLIFF_FACE,
+      STEEP_ROCKY_SLOPE,
+      TALUS_SLOPE,
+      VALLEY_WALL,
+      SNOWFIELD,
+      GLACIER_BASIN,
+      DRAINAGE_CHUTE,
+      ALPINE_MEADOW;
    }
 
    public static enum ShorelineKind {

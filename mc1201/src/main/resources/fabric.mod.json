@@ -21,6 +21,9 @@
 		],
 		"client": [
 			"com.yucareux.tellus.TellusClient"
+		],
+		"modmenu": [
+			"com.yucareux.tellus.client.modmenu.TellusModMenuIntegration"
 		]
 	},
 	"mixins": [

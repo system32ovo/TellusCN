@@ -23,6 +23,14 @@ public final class TellusBuildingBlueprints {
       List<RoadFeature> nearbyRoads,
       double worldScale
    ) {
+      return create(groupId, feature, profile, worldSeed, baseY, floorY, roofBaseY, topY, nearbyRoads, worldScale, List.of());
+   }
+
+   public static BuildingBlueprint create(
+      String groupId, OsmBuildingFeature feature, BuildingProfile profile, long worldSeed,
+      int baseY, int floorY, int roofBaseY, int topY, List<RoadFeature> nearbyRoads,
+      double worldScale, List<OsmBuildingFeature> nearbyBuildings
+   ) {
       Objects.requireNonNull(groupId, "groupId");
       Objects.requireNonNull(feature, "feature");
       Objects.requireNonNull(profile, "profile");
@@ -31,128 +39,16 @@ public final class TellusBuildingBlueprints {
       int minWorldZ = Mth.floor(feature.minBlockZ(worldScale));
       int maxWorldZ = Mth.ceil(feature.maxBlockZ(worldScale));
       long seed = mixSeed(worldSeed, feature.featureId(), groupId.hashCode());
-      EntrancePlacement entrance = resolveEntrance(feature, nearbyRoads, worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ, seed);
-      return new BuildingBlueprint(groupId, seed, profile, baseY, floorY, roofBaseY, topY, minWorldX, maxWorldX, minWorldZ, maxWorldZ, entrance.worldX(), entrance.worldZ(), entrance.facing(), entrance.width());
-   }
-
-   private static EntrancePlacement resolveEntrance(
-      OsmBuildingFeature feature,
-      List<RoadFeature> nearbyRoads,
-      double worldScale,
-      int minWorldX,
-      int maxWorldX,
-      int minWorldZ,
-      int maxWorldZ,
-      long seed
-   ) {
-      double[] centroid = feature.centroidWorld(worldScale);
-      int fallbackX = Mth.clamp((int)Math.round(centroid[0]), minWorldX, maxWorldX);
-      int fallbackZ = Mth.clamp((int)Math.round(centroid[1]), minWorldZ, maxWorldZ);
-      Direction bestFacing = longestAxisFacing(minWorldX, maxWorldX, minWorldZ, maxWorldZ);
-      double bestDistanceSq = Double.POSITIVE_INFINITY;
-      if (nearbyRoads != null) {
-         for (RoadFeature road : nearbyRoads) {
-            for (int i = 0; i < road.pointCount(); i++) {
-               double roadX = road.lonAt(i) * com.yucareux.tellus.worldgen.EarthProjection.blocksPerDegree(worldScale);
-               double roadZ = com.yucareux.tellus.worldgen.EarthProjection.latToBlockZ(road.latAt(i), worldScale);
-               double dx = roadX - centroid[0];
-               double dz = roadZ - centroid[1];
-               double distanceSq = dx * dx + dz * dz;
-               if (distanceSq <= 24.0 * 24.0 && distanceSq < bestDistanceSq) {
-                  bestDistanceSq = distanceSq;
-                  if (Math.abs(dx) >= Math.abs(dz)) {
-                     bestFacing = dx > 0.0 ? Direction.EAST : Direction.WEST;
-                  } else {
-                     bestFacing = dz > 0.0 ? Direction.SOUTH : Direction.NORTH;
-                  }
-               }
-            }
-         }
-      }
-
-      EntrancePlacement snapped = snapEntranceToFootprint(feature, worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ, bestFacing, fallbackX, fallbackZ);
-      if (snapped != null) {
-         return snapped;
-      }
-
-      return switch (bestFacing) {
-         case NORTH -> new EntrancePlacement(Mth.clamp(fallbackX, minWorldX + 1, maxWorldX - 1), minWorldZ, bestFacing, 1);
-         case SOUTH -> new EntrancePlacement(Mth.clamp(fallbackX, minWorldX + 1, maxWorldX - 1), maxWorldZ, bestFacing, 1);
-         case EAST -> new EntrancePlacement(maxWorldX, Mth.clamp(fallbackZ, minWorldZ + 1, maxWorldZ - 1), bestFacing, 1);
-         case WEST -> new EntrancePlacement(minWorldX, Mth.clamp(fallbackZ, minWorldZ + 1, maxWorldZ - 1), bestFacing, 1);
-         default -> new EntrancePlacement(fallbackX, minWorldZ, Direction.NORTH, 1);
-      };
-   }
-
-   private static EntrancePlacement snapEntranceToFootprint(
-      OsmBuildingFeature feature,
-      double worldScale,
-      int minWorldX,
-      int maxWorldX,
-      int minWorldZ,
-      int maxWorldZ,
-      Direction preferredFacing,
-      int preferredWorldX,
-      int preferredWorldZ
-   ) {
-      EntranceCandidate preferred = findBoundaryCandidate(
-         feature, worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ, preferredFacing, preferredWorldX, preferredWorldZ
+      BuildingStyle style = TellusBuildingStyles.resolveBuildingStyle(
+         profile, feature.metadata(), feature.areaSquareMeters(), maxWorldX - minWorldX + 1, maxWorldZ - minWorldZ + 1, seed
       );
-      if (preferred != null) {
-         return new EntrancePlacement(preferred.worldX(), preferred.worldZ(), preferred.facing(), 1);
-      }
-
-      EntranceCandidate best = null;
-      for (Direction direction : Direction.Plane.HORIZONTAL) {
-         EntranceCandidate candidate = findBoundaryCandidate(
-            feature, worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ, direction, preferredWorldX, preferredWorldZ
-         );
-         if (candidate != null && (best == null || candidate.score() < best.score())) {
-            best = candidate;
-         }
-      }
-
-      return best == null ? null : new EntrancePlacement(best.worldX(), best.worldZ(), best.facing(), 1);
-   }
-
-   private static EntranceCandidate findBoundaryCandidate(
-      OsmBuildingFeature feature,
-      double worldScale,
-      int minWorldX,
-      int maxWorldX,
-      int minWorldZ,
-      int maxWorldZ,
-      Direction facing,
-      int preferredWorldX,
-      int preferredWorldZ
-   ) {
-      EntranceCandidate best = null;
-      for (int worldZ = minWorldZ; worldZ <= maxWorldZ; worldZ++) {
-         for (int worldX = minWorldX; worldX <= maxWorldX; worldX++) {
-            if (!feature.containsWorld(worldX + 0.5, worldZ + 0.5, worldScale) || !touchesExterior(feature, worldScale, worldX, worldZ, facing)) {
-               continue;
-            }
-
-            double dx = worldX - preferredWorldX;
-            double dz = worldZ - preferredWorldZ;
-            double score = dx * dx + dz * dz;
-            if (best == null || score < best.score()) {
-               best = new EntranceCandidate(worldX, worldZ, facing, score);
-            }
-         }
-      }
-
-      return best;
-   }
-
-   private static boolean touchesExterior(OsmBuildingFeature feature, double worldScale, int worldX, int worldZ, Direction facing) {
-      return !feature.containsWorld(worldX + 0.5 + facing.getStepX(), worldZ + 0.5 + facing.getStepZ(), worldScale);
-   }
-
-   private static Direction longestAxisFacing(int minWorldX, int maxWorldX, int minWorldZ, int maxWorldZ) {
-      int width = maxWorldX - minWorldX;
-      int depth = maxWorldZ - minWorldZ;
-      return width >= depth ? Direction.SOUTH : Direction.EAST;
+      BuildingEntranceLayout.Placement entrance = profile.interiorsEnabled() && feature.minHeightMeters() <= 0
+         ? BuildingEntranceLayout.resolve(feature, nearbyRoads == null ? List.of() : nearbyRoads, nearbyBuildings,
+            worldScale, minWorldX, maxWorldX, minWorldZ, maxWorldZ) : null;
+      return new BuildingBlueprint(groupId, seed, profile, style, baseY, floorY, roofBaseY, topY,
+         minWorldX, maxWorldX, minWorldZ, maxWorldZ, entrance == null ? minWorldX : entrance.worldX(),
+         entrance == null ? minWorldZ : entrance.worldZ(), entrance == null ? Direction.NORTH : entrance.facing(),
+         entrance == null ? 0 : 1);
    }
 
    private static long mixSeed(long worldSeed, long featureId, long salt) {
@@ -165,9 +61,4 @@ public final class TellusBuildingBlueprints {
       return seed;
    }
 
-   private record EntrancePlacement(int worldX, int worldZ, Direction facing, int width) {
-   }
-
-   private record EntranceCandidate(int worldX, int worldZ, Direction facing, double score) {
-   }
 }

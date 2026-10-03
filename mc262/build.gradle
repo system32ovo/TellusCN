@@ -1,0 +1,39 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version '1.16.1'
+	id 'maven-publish'
+}
+
+ext.tellus = [
+	minecraftVersion: '26.2',
+	loaderVersion: '0.19.3',
+	fabricVersion: '0.152.1+26.2',
+	fabricDependencyConfiguration: 'implementation',
+	javaVersion: 25,
+	distantHorizonsRuntimeProperty: 'mc262_distant_horizons_runtime_path',
+	sharedSourceLayers: ['post-1201', 'mc262', 'fabric', 'modmenu'],
+	mapboxVersion: '24.1.1',
+	protobufVersion: '4.28.2',
+	officialMappings: false,
+	testDistantHorizonsRuntime: true,
+	// Mod Menu 编译期依赖版本：22.0.0-alpha.1 是目前最新的发布版本
+	modmenuVersion: '22.0.0-alpha.1',
+]
+
+apply from: rootProject.file('gradle/tellus-fabric.gradle')
+
+tasks.register('simulateFastLodDataLoading', JavaExec) {
+	group = 'verification'
+	description = 'Profiles Tellus source loading for Fast LODs at experimental 1:1 height without starting Minecraft.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.yucareux.tellus.worldgen.FastLodDataLoadingSimulation'
+	maxHeapSize = '2g'
+	jvmArgs '-Dtellus.experimentalHeight.coordinateProfile=global_mercator_land_v2'
+	def defaultSimulationGameDir = layout.buildDirectory.dir('lod-simulation-game').get().asFile.absolutePath
+	def simulationGameDir = providers.gradleProperty('simGameDir').getOrElse(defaultSimulationGameDir)
+	systemProperty 'tellus.gameDir', simulationGameDir
+	systemProperty 'tellus.configDir', new File(simulationGameDir, 'config').absolutePath
+	args "--latitude=${providers.gradleProperty('simLatitude').getOrElse('20.6534')}"
+	args "--longitude=${providers.gradleProperty('simLongitude').getOrElse('-105.2253')}"
+	args "--grid=${providers.gradleProperty('simGrid').getOrElse('64')}"
+	args "--details=${providers.gradleProperty('simDetails').getOrElse('0,4,6,8,11')}"
+}

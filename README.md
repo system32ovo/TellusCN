@@ -26,9 +26,20 @@ Server support note: Tellus must be installed on the server, but is not required
 - Highly customizable terrain generation (scale, height limits, and more)
 - Built-in terrain preview screen for visualizing settings before world creation
 - Biomes placed to match real-world climate regions
+- OSM roads, buildings, and map features generated with Arnis-derived logic
 - Real-time inspired weather and time systems (optional)
 - Distant Horizons integration for long-distance terrain rendering
 - In-game map teleport UI for choosing real-world locations
+
+## Third-Party Code
+
+Tellus includes code derived from Arnis.
+
+Copyright (c) 2022-2026 Louis Erbkamm (louis-e)
+
+Licensed under the Apache License, Version 2.0.
+
+Source: https://github.com/louis-e/arnis
 
 ## Distant Horizons Integration
 
@@ -38,6 +49,16 @@ Tellus integrates with the Distant Horizons (DH) mod to render planet-scale terr
 - **Detailed mode**: Tellus delegates to DH's chunk-based generator for far terrain, which is more accurate but significantly heavier on performance.
 
 Because Tellus worlds are Earth-scale, DH is strongly recommended and is almost essential for comfortable exploration and long-distance views.
+
+### Offline Fast LOD profiling
+
+The Minecraft 26.2 target includes a headless source-loading simulation for Fast LOD development. It uses experimental 1:1 true-height settings, prefetches the real elevation, land-cover, land-mask, Overture water/road/building inputs, and reports cold/warm sampling timings without starting Minecraft or creating a world:
+
+```bash
+./gradlew :mc262:simulateFastLodDataLoading
+```
+
+The default 64×64 detail-11 pass spans 8192 chunks, matching a 4096-chunk render radius. Use `-PsimDetails=0,6,11`, `-PsimGrid=64`, `-PsimLatitude=...`, and `-PsimLongitude=...` to select a smaller profile. The task stores its isolated cache under `mc262/build/lod-simulation-game`; `-PsimGameDir=...` selects another cache for cold-run comparisons.
 
 ## Commands
 
@@ -56,30 +77,31 @@ These options are available in the "Customize World Generation" screen when crea
 ![Tellus config screen](images/Config%20screen.png)
 
 ### World Settings
-- **World Scale**: Controls how many real-world meters are represented by one block. Lower values create more detailed, larger worlds; higher values compress distances and features. Current limits are 1:1m to 1:500m per block, with larger scales planned up to 1:40km.
+- **World Scale**: Controls how many real-world meters are represented by one block. Lower values create more detailed, larger worlds; higher values compress distances and features. Current limits are 1:1m to 1:1km per block.
+- **Increase Height**: Enables the experimental expanded-height terrain profile. Elevation remains proportional to the selected World Scale. Hover over the option in-game for the current compatibility warning.
 - **Terrestrial Height Scale**: Multiplier that converts elevation above sea level from meters to blocks. Higher values produce taller mountains and landforms.
 - **Oceanic Height Scale**: Multiplier that converts elevation below sea level from meters to blocks. Higher values deepen oceans and trenches.
 - **Height Offset**: Shifts all terrain up or down by a fixed number of blocks. Use this to raise or lower the entire world.
-- **Sea Level**: Sets the waterline in blocks without shifting the terrain. Set to Automatic to track the height offset.
 - **Max Altitude**: Upper world limit in blocks. Set to Automatic to let Tellus compute a safe cap based on your scale settings.
 - **Min Altitude**: Lower world limit in blocks. Set to Automatic to let Tellus compute a safe floor based on your scale settings.
-- **River/Lake Shoreline Blend**: Distance in blocks used to smooth river and lake edges into nearby terrain.
-- **Ocean Shoreline Blend**: Distance in blocks used to smooth ocean coastlines into land.
-- **Limit Shoreline Blend on Cliffs**: Prevents shoreline smoothing on steep slopes to preserve sharp cliffs.
+- **Water**: Uses Overture Maps `ocean`/`sea` polygons as the sole ocean and coastline authority. Rivers and lakes retain their own Overture feature kinds, and ocean floors use OpenWaters bathymetry with a corrective coastal safety ramp.
 
 ### Ecological Settings (work in progress)
 These options are currently locked and not adjustable yet. They describe what will be configurable in a future update.
-- **Land Vegetation**: Will enable grasses, flowers, and small plants on land.
-- **Land Vegetation Density**: Will control how dense land vegetation appears.
 - **Tree Density**: Will control how many trees spawn in eligible biomes.
 - **Aquatic Vegetation**: Will enable kelp and seagrass in water.
-- **Crops in Villages**: Will add village farm plots during village generation.
 
 ### Geological Settings
 The cave and underground generation system is still work in progress, so expect changes here.
-- **Cave Generation**: Toggles underground cave generation.
-- **Ore Distribution**: Enables vanilla ore distribution in Tellus worlds.
+- **Cave Generation**: Projects modern Overworld cave density throughout the configured terrain shell, with supplemental tunnels and ravines.
+- **Ore Distribution**: Generates mineable ores and raw ore blocks independently from decorative host-rock patches.
+- **Geological Stone Patches**: Optionally generates buried granite, diorite, andesite, and tuff patches. This is disabled by default.
 - **Lava Pools**: Enables underground lava pools.
+- **Underground Depth**: Controls how far the terrain shell, caves, ores, cave biomes, and underground structures extend below the local surface.
+
+Tellus reads the live `minecraft:overworld` noise settings, so compatible data packs and mods that replace the Overworld density router can influence its modern cave field. Mods that add biome-registered custom carvers are not currently supported by the Tellus surface-relative carver runner.
+
+Worlds created with earlier 0.8.1 builds keep their already-generated chunks unchanged. Newly generated chunks use the corrected full-depth underground rules, so underground seams may be visible at old chunk borders.
 
 ### Structure Settings
 This section lets you toggle vanilla structures and world features on or off, such as villages, temples, monuments, ruins, and underground features like Deep Dark and amethyst geodes. Some structures (notably Deep Dark and certain ocean structures) may not generate properly yet and are still work in progress.
@@ -91,15 +113,15 @@ This section lets you toggle vanilla structures and world features on or off, su
 
 ### Compatibility Settings
 - **Distant Horizons Render Mode**: Fast uses Tellus's LOD generator to build simplified distant terrain quickly with lower cost. Detailed asks Distant Horizons to use full chunk generation for far terrain, which is more accurate but significantly slower and heavier. For most setups, keeping Fast LOD generation is recommended.
-- **LOD Water Resolver**: Adds detailed water depth sampling to Distant Horizons fast LODs, improving coastlines, lakes, and ocean floors at distance but with extra cost. If you plan to play around water-heavy regions, it is suggested to keep this enabled; otherwise you can disable it for better performance.
+- **LOD Water Resolver**: Adds water depth and smoother water surfaces to Distant Horizons fast LODs using cached Overture vector water without a coarse land-cover fallback.
 - **Coming Soon**: Additional compatibility options are work in progress and currently unavailable.
 
 ### Cache
 - **OSM data**: Cached map, road, and water tiles used by Tellus map and OSM features. Deleting will force re-downloads as needed.
-- **ESA WorldCover**: Cached land cover tiles used for biome and vegetation lookups.
+- **ESA WorldCover land cover**: Official 10 m categorical COG pixels and internal overview levels, fetched and cached by compressed byte range for biome and vegetation lookups.
 - **Koppen climate**: Cached climate raster used for biome climate classification.
-- **Terrain tiles**: Cached elevation tiles used for terrain height sampling.
-- **ArcticDEM**: Cached ArcticDEM index files used when the ArcticDEM DEM provider is selected.
+- **Mapterhorn terrain**: Cached elevation tiles used for terrain height sampling.
+- **OpenWaters bathymetry**: Cached bathymetry tiles used for ocean and underwater terrain.
 - **Total**: Combined size of all Tellus caches (read-only).
 - **Delete cache / Delete all cache**: Removes cached data to free disk space; data will be re-downloaded or rebuilt as needed.
 </details>
@@ -107,14 +129,22 @@ This section lets you toggle vanilla structures and world features on or off, su
 <details>
   <summary>Data Sources</summary>
 
-### ESA WorldCover 2021 (land cover)
-- ESA WorldCover 2021 (10 m land cover, v200)
-- (c) ESA WorldCover project / Contains modified Copernicus Sentinel data (2021)
-- processed by ESA WorldCover consortium.
-- License: CC BY 4.0
-- https://creativecommons.org/licenses/by/4.0/
-- https://doi.org/10.5281/zenodo.7254221
-- In-game processing: reprojected to the world grid, resampled to blocks, and cached as tiles for fast lookup.
+### ESA WorldCover land cover
+- ESA WorldCover 2021 v200 is sampled at its native approximately 10 m resolution for close terrain. Its built-in 20–640 m COG overviews are selected for larger world scales and LOD requests.
+- Tellus requests only the compressed TIFF blocks needed for the explored area and stores them in a bounded local cache; it does not download complete 3° source files.
+- The decoded memory cache defaults to 64 MiB and the compressed disk cache to 512 MiB. Override them with `tellus.worldcover.memoryCacheMb` and `tellus.worldcover.diskCacheMb`; mirrors can use `tellus.worldcover.baseUrl`.
+- © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium.
+- ESA WorldCover license: CC BY 4.0.
+- Overture Maps base-theme land cover remains an availability and out-of-coverage fallback. © Overture Maps Foundation; base-theme license: ODbL.
+- https://esa-worldcover.org/en/data-access
+- https://docs.overturemaps.org/attribution/
+- In-game processing: the primary COG is fetched with HTTP byte ranges and sampled directly; Overture fallback vectors use PMTiles byte ranges and a compact raster cache.
+
+### Overture Maps water
+- Overture Maps base-theme water features provide inland-water geometry and definitive `ocean`/`sea` coastline polygons.
+- Ocean classification does not use Mapterhorn elevation, land-mask state, or an elevation-at-or-below-zero heuristic.
+- Complete empty vector tiles are valid dry coverage. Pending or failed coverage is kept non-cacheable so temporary source failures cannot become permanent dry seams.
+- https://docs.overturemaps.org/attribution/
 
 ### Koppen-Geiger climate classification
 - Source: Beck, H.E., Zimmermann, N.E., McVicar, T.R., et al. (2018).
@@ -125,20 +155,21 @@ This section lets you toggle vanilla structures and world features on or off, su
 - https://doi.org/10.1038/sdata.2018.214
 - In-game processing: reprojected and resampled to match the world grid, cached for fast lookup.
 
-### Terrain Tiles (global DEM tiles)
-- Terrain Tiles (AWS Open Data Registry / Mapzen Jord)
-- https://registry.opendata.aws/terrain-tiles
-- Source attributions for Terrain Tiles:
-- ArcticDEM terrain data: DEM(s) were created from DigitalGlobe, Inc. imagery and funded under National Science Foundation awards 1043681, 1559691, and 1542736.
-- Australia terrain data (c) Commonwealth of Australia (Geoscience Australia) 2017.
-- Austria terrain data (c) offene Daten Osterreichs - Digitales Gelandemodell (DGM) Osterreich.
-- Canada terrain data contains information licensed under the Open Government Licence - Canada.
-- Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers.
-- Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration.
-- New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved).
-- Norway terrain data (c) Kartverket.
-- United Kingdom terrain data (c) Environment Agency copyright and/or database right 2015. All rights reserved.
-- United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.
+### Mapterhorn terrain DEM
+- Source: Mapterhorn global terrain tiles.
+- Website: https://mapterhorn.com/
+- In-game processing: sampled as Terrarium elevation tiles, with zoom selected from player scale and cached locally for reuse.
+
+### OpenWaters Seascape bathymetry
+- Source: OpenWaters Seascape bathymetry raster DEM tiles.
+- Project: https://github.com/openwatersio/seascape
+- Tiles: https://tiles.openwaters.io/seascape/
+- License: CC BY 4.0 for the published tile compilation.
+- In-game processing: Overture `ocean` and `sea` polygons define ocean membership independently of either elevation source. OpenWaters Terrarium pixels are bilinearly sampled at a zoom selected for the requested world/LOD resolution. Negative elevations are scaled by the oceanic height scale; zero or positive samples remain ocean and are clamped to a one-block minimum depth. Deterministic fallback bathymetry is used only when OpenWaters is unavailable.
+- Coastal safety: naturally shallow OpenWaters profiles are preserved. Abrupt, invalid, or missing profiles receive a smooth one-block-to-raw-depth ramp over 512 blocks by default. Configure it with `tellus.water.oceanFloorTransitionBlocks` (`0..2048`); DH inherits this unless `tellus.dhWaterOceanFloorTransitionBlocks` is supplied. The 512-block Overture coastline macro-tile cache defaults to 32 entries and can be set with `tellus.oceanCoastCacheTiles` (`4..256`).
+- DH renders the raw profiled ocean floor by default so deep-water variation remains continuous. Legacy logarithmic depth compression is opt-in through `tellus.dhWaterOceanDepthCompressionEnabled=true` and no longer uses a fixed maximum-depth plateau.
+- When raw bathymetry is deeper than the dimension permits, Tellus now fits it monotonically into the available vertical range instead of clamping every sample to the same bottom Y. Ocean floors reserve eight solid support blocks above the world minimum, configurable with `tellus.water.oceanFloorSupportBlocks` (`2..32`).
+- Compatibility: the serialized `ocean_shoreline_blend` setting is retained but is a no-op for oceans. River/lake shoreline blending is unchanged.
 
 ### Open-Meteo (weather)
 - Weather data provided by Open-Meteo.com.

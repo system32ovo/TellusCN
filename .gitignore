@@ -31,6 +31,22 @@ bin/
 # fabric
 
 run/
+mc*/logs/
+mc*/.fabric/
+mc*/config/
+mc*/data/
+mc*/downloads/
+mc*/tellus/
+mc*/options.txt
+mc*/usercache.json
+
+# local build and integration output
+
+/output/
+/third_party/
+
+# 游戏与构建运行日志（Gradle 测试 / 启动游戏时自动生成，不应提交）
+logs/
 
 # java
 

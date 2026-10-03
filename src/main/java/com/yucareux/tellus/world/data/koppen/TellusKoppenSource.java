@@ -1,6 +1,9 @@
 package com.yucareux.tellus.world.data.koppen;
 
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.yucareux.tellus.cache.TellusCacheDomain;
+import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
 import com.yucareux.tellus.Tellus;
@@ -16,13 +19,10 @@ import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
 import java.util.zip.InflaterInputStream;
-import net.fabricmc.loader.api.FabricLoader;
+import com.yucareux.tellus.platform.TellusPlatform;
 import net.minecraft.util.Mth;
 
 public final class TellusKoppenSource implements TellusCacheHandle {
@@ -44,7 +44,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
    private static final ThreadLocal<TellusKoppenSource.KoppenBlendScratch> DITHER_SCRATCH = ThreadLocal.withInitial(
       TellusKoppenSource.KoppenBlendScratch::new
    );
-   private final Path cachePath = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/koppen/koppen_geiger_0p00833333.tif");
+   private final Path cachePath = TellusPlatform.gameDir().resolve("tellus/cache/koppen/koppen_geiger_0p00833333.tif");
    private volatile TellusKoppenSource.GeoTiffRaster raster;
 
    public TellusKoppenSource() {
@@ -199,6 +199,11 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          return !Files.exists(this.cachePath) ? TellusKoppenSource.GeoTiffRaster.MISSING : TellusKoppenSource.GeoTiffRaster.open(this.cachePath);
       } catch (IOException var2) {
          Tellus.LOGGER.warn("Failed to load Koppen raster", var2);
+         try {
+            Files.deleteIfExists(this.cachePath);
+         } catch (IOException deleteError) {
+            var2.addSuppressed(deleteError);
+         }
          return TellusKoppenSource.GeoTiffRaster.MISSING;
       }
    }
@@ -207,10 +212,8 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       try {
          try (InputStream input = TellusKoppenSource.class.getClassLoader().getResourceAsStream(RESOURCE_PATH)) {
             if (input != null) {
-               Files.createDirectories(this.cachePath.getParent());
-               Path temp = this.cachePath.resolveSibling(this.cachePath.getFileName() + ".tmp");
-               Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING);
-               Files.move(temp, this.cachePath, StandardCopyOption.REPLACE_EXISTING);
+               long generation = TellusCacheRegistry.generation(TellusCacheDomain.KOPPEN);
+               TellusCacheFiles.writeIfCurrent(TellusCacheDomain.KOPPEN, generation, this.cachePath, input::transferTo);
                return;
             }
 
@@ -303,6 +306,11 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private static final int COMPRESSION_LZW = 5;
       private static final int COMPRESSION_DEFLATE = 8;
       private static final int MAX_TILE_CACHE = 64;
+      private static final int MAX_RASTER_DIMENSION = 100_000;
+      private static final int MAX_TILE_DIMENSION = 4096;
+      private static final int MAX_TILE_SAMPLES = 16 * 1024 * 1024;
+      private static final int MAX_TIFF_ARRAY_ENTRIES = 100_000;
+      private static final int MAX_COMPRESSED_TILE_BYTES = 64 * 1024 * 1024;
       private static final TellusKoppenSource.GeoTiffRaster MISSING = new TellusKoppenSource.GeoTiffRaster();
       private final Path path;
       private final FileChannel channel;
@@ -319,7 +327,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       private final double tieLon;
       private final double tieLat;
       private final double pixelSizeMeters;
-      private final Map<Integer, byte[]> tileCache;
+      private final Cache<Integer, byte[]> tileCache;
 
       private GeoTiffRaster() {
          this.path = null;
@@ -337,7 +345,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          this.tieLon = 0.0;
          this.tieLat = 0.0;
          this.pixelSizeMeters = 0.0;
-         this.tileCache = Map.of();
+         this.tileCache = CacheBuilder.newBuilder().maximumSize(0L).build();
       }
 
       private GeoTiffRaster(
@@ -370,12 +378,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          this.tieLon = tieLon;
          this.tieLat = tieLat;
          this.pixelSizeMeters = Math.abs(pixelScaleX) * (EQUATOR_CIRCUMFERENCE / 360.0);
-         this.tileCache = new LinkedHashMap<Integer, byte[]>(MAX_TILE_CACHE, 0.75F, true) {
-            @Override
-            protected boolean removeEldestEntry(Entry<Integer, byte[]> eldest) {
-               return this.size() > MAX_TILE_CACHE;
-            }
-         };
+         this.tileCache = CacheBuilder.newBuilder().maximumSize(MAX_TILE_CACHE).build();
       }
 
       static TellusKoppenSource.GeoTiffRaster open(Path path) throws IOException {
@@ -383,17 +386,19 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
          try {
             return readFromChannel(path, channel);
-         } catch (IOException var3) {
+         } catch (IOException | RuntimeException error) {
             channel.close();
-            throw var3;
+            if (error instanceof IOException io) {
+               throw io;
+            }
+            throw new IOException("Invalid Koppen TIFF cache", error);
          }
       }
 
       void close() {
          if (this.channel != null) {
-            synchronized (this.tileCache) {
-               this.tileCache.clear();
-            }
+            this.tileCache.invalidateAll();
+            this.tileCache.cleanUp();
 
             try {
                this.channel.close();
@@ -560,23 +565,32 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
 
       private byte[] getTile(int tileIndex) throws IOException {
-         synchronized (this.tileCache) {
-            byte[] cached = this.tileCache.get(tileIndex);
-            if (cached != null) {
-               return cached;
+         try {
+            return this.tileCache.get(tileIndex, () -> this.readTile(tileIndex));
+         } catch (ExecutionException error) {
+            Throwable cause = error.getCause();
+            if (cause instanceof IOException io) {
+               throw io;
             }
-         }
-
-         byte[] tile = this.readTile(tileIndex);
-         synchronized (this.tileCache) {
-            this.tileCache.put(tileIndex, tile);
-            return tile;
+            if (cause instanceof RuntimeException runtime) {
+               throw runtime;
+            }
+            if (cause instanceof Error fatal) {
+               throw fatal;
+            }
+            throw new IOException("Failed to read Koppen tile " + tileIndex, cause);
          }
       }
 
       private byte[] readTile(int tileIndex) throws IOException {
+         if (tileIndex < 0 || tileIndex >= this.tileOffsets.length || tileIndex >= this.tileByteCounts.length) {
+            throw new IOException("TIFF tile index is outside the tile table");
+         }
          long offset = this.tileOffsets[tileIndex];
          int length = this.tileByteCounts[tileIndex];
+         if (length <= 0 || length > MAX_COMPRESSED_TILE_BYTES) {
+            throw new IOException("Invalid TIFF tile byte count " + length);
+         }
          byte[] compressed = new byte[length];
 
          try {
@@ -591,7 +605,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
             }
          }
 
-         int expectedSize = this.tileWidth * this.tileHeight;
+         int expectedSize = checkedTileSamples(this.tileWidth, this.tileHeight);
          if (this.compression == COMPRESSION_DEFLATE) {
             return inflate(compressed, expectedSize);
          } else if (this.compression == COMPRESSION_LZW) {
@@ -617,11 +631,13 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          if (magic != 42) {
             throw new IOException("Invalid TIFF magic");
          } else {
-            int ifdOffset = header.getInt();
+            long ifdOffset = Integer.toUnsignedLong(header.getInt());
+            validateRange(channel, ifdOffset, 2L, "TIFF directory");
             ByteBuffer countBuffer = ByteBuffer.allocate(2).order(byteOrder);
             readFully(channel, countBuffer, ifdOffset);
             countBuffer.flip();
             int entryCount = Short.toUnsignedInt(countBuffer.getShort());
+            validateRange(channel, ifdOffset + 2L, (long)entryCount * 12L, "TIFF directory entries");
             ByteBuffer entries = ByteBuffer.allocate(entryCount * 12).order(byteOrder);
             readFully(channel, entries, ifdOffset + 2L);
             entries.flip();
@@ -657,26 +673,58 @@ public final class TellusKoppenSource implements TellusCacheHandle {
                      tileHeight = readIntValue(type, count, value, byteOrder);
                      break;
                   case TAG_TILE_OFFSETS:
-                     tileOffsets = readLongArray(channel, value, count, byteOrder);
+                     tileOffsets = readLongArray(channel, Integer.toUnsignedLong(value), count, byteOrder);
                      break;
                   case TAG_TILE_BYTE_COUNTS:
-                     tileByteCounts = readIntArray(channel, value, count, byteOrder);
+                     tileByteCounts = readIntArray(channel, Integer.toUnsignedLong(value), count, byteOrder);
                      break;
                   case TAG_MODEL_PIXEL_SCALE:
-                     pixelScale = readDoubleArray(channel, value, count, byteOrder);
+                     pixelScale = readDoubleArray(channel, Integer.toUnsignedLong(value), count, byteOrder);
                      break;
                   case TAG_MODEL_TIEPOINT:
-                     tiepoint = readDoubleArray(channel, value, count, byteOrder);
+                     tiepoint = readDoubleArray(channel, Integer.toUnsignedLong(value), count, byteOrder);
                }
             }
 
             if (compression != COMPRESSION_DEFLATE && compression != COMPRESSION_LZW) {
                throw new IOException("Unsupported TIFF compression " + compression);
-            } else if (width <= 0 || height <= 0 || tileWidth <= 0 || tileHeight <= 0) {
+            } else if (width <= 0
+               || height <= 0
+               || width > MAX_RASTER_DIMENSION
+               || height > MAX_RASTER_DIMENSION
+               || tileWidth <= 0
+               || tileHeight <= 0
+               || tileWidth > MAX_TILE_DIMENSION
+               || tileHeight > MAX_TILE_DIMENSION) {
                throw new IOException("Missing TIFF size tags");
             } else if (tileOffsets == null || tileByteCounts == null) {
                throw new IOException("Missing TIFF tile offsets");
             } else if (pixelScale != null && pixelScale.length >= 2 && tiepoint != null && tiepoint.length >= 5) {
+               checkedTileSamples(tileWidth, tileHeight);
+               long tilesAcross = ((long)width + tileWidth - 1L) / tileWidth;
+               long tilesDown = ((long)height + tileHeight - 1L) / tileHeight;
+               long expectedTiles = tilesAcross * tilesDown;
+               if (expectedTiles <= 0L
+                  || expectedTiles > MAX_TIFF_ARRAY_ENTRIES
+                  || tileOffsets.length != expectedTiles
+                  || tileByteCounts.length != expectedTiles) {
+                  throw new IOException("TIFF tile table does not match the raster dimensions");
+               }
+               for (int tile = 0; tile < tileOffsets.length; tile++) {
+                  int byteCount = tileByteCounts[tile];
+                  if (byteCount <= 0 || byteCount > MAX_COMPRESSED_TILE_BYTES) {
+                     throw new IOException("Invalid TIFF tile byte count " + byteCount);
+                  }
+                  validateRange(channel, tileOffsets[tile], byteCount, "TIFF tile");
+               }
+               if (!Double.isFinite(pixelScale[0])
+                  || !Double.isFinite(pixelScale[1])
+                  || pixelScale[0] == 0.0
+                  || pixelScale[1] == 0.0
+                  || !Double.isFinite(tiepoint[3])
+                  || !Double.isFinite(tiepoint[4])) {
+                  throw new IOException("Invalid TIFF georeference values");
+               }
                return new TellusKoppenSource.GeoTiffRaster(
                   path,
                   channel,
@@ -719,7 +767,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          if (count <= 0) {
             return new long[0];
          } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 4).order(order);
+            int byteCount = checkedArrayBytes(count, Integer.BYTES, "TIFF long array");
+            validateRange(channel, offset, byteCount, "TIFF long array");
+            ByteBuffer buffer = ByteBuffer.allocate(byteCount).order(order);
             readFully(channel, buffer, offset);
             buffer.flip();
             long[] values = new long[count];
@@ -736,7 +786,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          if (count <= 0) {
             return new int[0];
          } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 4).order(order);
+            int byteCount = checkedArrayBytes(count, Integer.BYTES, "TIFF integer array");
+            validateRange(channel, offset, byteCount, "TIFF integer array");
+            ByteBuffer buffer = ByteBuffer.allocate(byteCount).order(order);
             readFully(channel, buffer, offset);
             buffer.flip();
             int[] values = new int[count];
@@ -753,7 +805,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
          if (count <= 0) {
             return new double[0];
          } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 8).order(order);
+            int byteCount = checkedArrayBytes(count, Double.BYTES, "TIFF double array");
+            validateRange(channel, offset, byteCount, "TIFF double array");
+            ByteBuffer buffer = ByteBuffer.allocate(byteCount).order(order);
             readFully(channel, buffer, offset);
             buffer.flip();
             double[] values = new double[count];
@@ -767,6 +821,7 @@ public final class TellusKoppenSource implements TellusCacheHandle {
       }
 
       private static void readFully(FileChannel channel, ByteBuffer buffer, long offset) throws IOException {
+         validateRange(channel, offset, buffer.remaining(), "TIFF data");
          long position = offset;
 
          while (buffer.hasRemaining()) {
@@ -781,6 +836,28 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
       private static void readFully(FileChannel channel, byte[] dest, long offset) throws IOException {
          readFully(channel, ByteBuffer.wrap(dest), offset);
+      }
+
+      private static int checkedArrayBytes(int count, int bytesPerValue, String label) throws IOException {
+         if (count <= 0 || count > MAX_TIFF_ARRAY_ENTRIES) {
+            throw new IOException("Invalid " + label + " count " + count);
+         }
+         return Math.multiplyExact(count, bytesPerValue);
+      }
+
+      private static int checkedTileSamples(int width, int height) throws IOException {
+         long samples = (long)width * height;
+         if (width <= 0 || height <= 0 || samples > MAX_TILE_SAMPLES) {
+            throw new IOException("TIFF tile dimensions exceed the safety limit");
+         }
+         return (int)samples;
+      }
+
+      private static void validateRange(FileChannel channel, long offset, long length, String label) throws IOException {
+         long fileSize = channel.size();
+         if (offset < 0L || length < 0L || offset > fileSize || length > fileSize - offset) {
+            throw new IOException(label + " range is outside the TIFF file");
+         }
       }
 
       private static byte[] inflate(byte[] compressed, int expectedSize) throws IOException {
@@ -801,6 +878,9 @@ public final class TellusKoppenSource implements TellusCacheHandle {
 
             if (offset != expectedSize) {
                throw new IOException("Unexpected inflated data length");
+            }
+            if (inflater.read() != -1) {
+               throw new IOException("Inflated TIFF tile exceeds its declared dimensions");
             }
 
             var8 = output;

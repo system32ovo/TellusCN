@@ -8,9 +8,11 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class TellusCacheRegistry {
    private static final CopyOnWriteArrayList<WeakReference<TellusCacheHandle>> HANDLES = new CopyOnWriteArrayList<>();
+   private static final AtomicLong[] GENERATIONS = createGenerations();
 
    private TellusCacheRegistry() {
    }
@@ -53,7 +55,16 @@ public final class TellusCacheRegistry {
       clearMatching(null);
    }
 
+   public static long generation(TellusCacheDomain domain) {
+      return GENERATIONS[domain.ordinal()].get();
+   }
+
+   public static boolean isCurrent(TellusCacheDomain domain, long generation) {
+      return generation(domain) == generation;
+   }
+
    private static void clearMatching(TellusCacheDomain domain) {
+      advanceGeneration(domain);
       Set<TellusCacheHandle> cleared = Collections.newSetFromMap(new IdentityHashMap<>());
       List<WeakReference<TellusCacheHandle>> staleReferences = null;
 
@@ -65,7 +76,7 @@ public final class TellusCacheRegistry {
             }
 
             staleReferences.add(reference);
-         } else if ((domain == null || handle.cacheDomain() == domain) && cleared.add(handle)) {
+         } else if ((domain == null || handle.matchesCacheDomain(domain)) && cleared.add(handle)) {
             try {
                handle.clearCache();
             } catch (RuntimeException error) {
@@ -80,6 +91,26 @@ public final class TellusCacheRegistry {
    private static void removeStaleReferences(List<WeakReference<TellusCacheHandle>> staleReferences) {
       if (staleReferences != null && !staleReferences.isEmpty()) {
          HANDLES.removeAll(staleReferences);
+      }
+   }
+
+   private static AtomicLong[] createGenerations() {
+      TellusCacheDomain[] domains = TellusCacheDomain.values();
+      AtomicLong[] generations = new AtomicLong[domains.length];
+      for (TellusCacheDomain domain : domains) {
+         generations[domain.ordinal()] = new AtomicLong();
+      }
+
+      return generations;
+   }
+
+   private static void advanceGeneration(TellusCacheDomain domain) {
+      if (domain == null) {
+         for (AtomicLong generation : GENERATIONS) {
+            generation.incrementAndGet();
+         }
+      } else {
+         GENERATIONS[domain.ordinal()].incrementAndGet();
       }
    }
 }

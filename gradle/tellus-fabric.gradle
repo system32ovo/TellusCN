@@ -1,0 +1,262 @@
+def config = project.ext.tellus
+def minecraftVersion = config.minecraftVersion
+def javaVersion = config.javaVersion as int
+def sharedSourceLayers = config.sharedSourceLayers as List
+def sharedMainSourceLayers = (config.sharedMainSourceLayers ?: sharedSourceLayers) as List
+def sharedClientSourceLayers = (config.sharedClientSourceLayers ?: sharedSourceLayers) as List
+def sharedTestSourceLayers = (config.sharedTestSourceLayers ?: sharedMainSourceLayers) as List
+def inheritedJavaProjects = (config.inheritedJavaProjects ?: []) as List
+def inheritedMainJavaProjects = (config.inheritedMainJavaProjects ?: inheritedJavaProjects) as List
+def inheritedClientJavaProjects = (config.inheritedClientJavaProjects ?: inheritedJavaProjects) as List
+def inheritedResourceProjects = (config.inheritedResourceProjects ?: inheritedJavaProjects) as List
+def inheritedMainResourceProjects = (config.inheritedMainResourceProjects ?: inheritedResourceProjects) as List
+def inheritedClientResourceProjects = (config.inheritedClientResourceProjects ?: inheritedResourceProjects) as List
+def distantHorizonsApiVersion = '7.0.0'
+def twelveMonkeysImageioVersion = '3.13.1'
+def distantHorizonsRuntimePath = providers.gradleProperty(config.distantHorizonsRuntimeProperty).orNull
+def usesLocalRuntimeMods = minecraftVersion == '26.2'
+def overriddenSharedMainSources = (config.overriddenSharedMainSources ?: []) as Set
+def overriddenSharedClientSources = (config.overriddenSharedClientSources ?: []) as Set
+def inheritedMainJavaDirs = inheritedMainJavaProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/main/java")
+}
+def inheritedClientJavaDirs = inheritedClientJavaProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/client/java")
+}
+def overriddenInheritedMainSources = (config.overriddenInheritedMainSources ?: []) as Set
+def overriddenInheritedClientSources = (config.overriddenInheritedClientSources ?: []) as Set
+def inheritedMainResourceDirs = inheritedMainResourceProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/main/resources")
+}
+def inheritedClientResourceDirs = inheritedClientResourceProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/client/resources")
+}
+def overriddenInheritedMainResources = (config.overriddenInheritedMainResources ?: []) as Set
+def overriddenInheritedClientResources = (config.overriddenInheritedClientResources ?: []) as Set
+def overriddenSharedMainResources = (config.overriddenSharedMainResources ?: []) as Set
+def overriddenSharedClientResources = (config.overriddenSharedClientResources ?: []) as Set
+def sharedMainJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/java')
+def sharedClientJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/java')
+def sharedMainResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/resources')
+def sharedClientResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/resources')
+def mainJavaDirs = sharedMainJavaDirs + inheritedMainJavaDirs + [project.file('src/main/java')]
+def clientJavaDirs = sharedClientJavaDirs + inheritedClientJavaDirs + [project.file('src/client/java')]
+def mainResourceDirs = sharedMainResourceDirs + inheritedMainResourceDirs + [project.file('src/main/resources')]
+def clientResourceDirs = sharedClientResourceDirs + inheritedClientResourceDirs + [project.file('src/client/resources')]
+def isShadowed = { element, Set<String> overriddenPaths, List<File> sourceDirs ->
+	def relativePath = element.relativePath.pathString
+	if (!overriddenPaths.contains(relativePath)) {
+		return false
+	}
+	def owner = sourceDirs.reverse().find { sourceDir -> new File(sourceDir, relativePath).isFile() }
+	return owner != null && element.file.toPath().toAbsolutePath().normalize()
+		!= new File(owner, relativePath).toPath().toAbsolutePath().normalize()
+}
+
+base {
+	archivesName = "${rootProject.archives_base_name}-fabric-${minecraftVersion}"
+}
+
+configurations {
+	bundledLibrary
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+	archiveVersion.set(project.version.toString())
+}
+
+repositories {
+	mavenCentral()
+	maven {
+		url = 'https://api.modrinth.com/maven/'
+		content {
+			includeGroup 'maven.modrinth'
+		}
+	}
+	// Mod Menu 的官方仓库；只有配置了 modmenuVersion 的目标才会真正拉取依赖
+	maven {
+		url = 'https://maven.terraformersmc.com/'
+		content {
+			includeGroup 'com.terraformersmc'
+		}
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		tellus {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+pluginManager.withPlugin('eclipse') {
+	eclipse {
+		classpath {
+			file {
+				beforeMerged { classpath ->
+					classpath.entries.clear()
+				}
+				whenMerged { classpath ->
+					classpath.entries
+						.findAll { it.kind == 'src' && (it.path == 'main-java' || it.path == 'src_main_java') }
+						.each { it.excludes = (it.excludes + overriddenSharedMainSources).unique() }
+				}
+			}
+		}
+	}
+}
+
+sourceSets {
+	main {
+		java {
+			setSrcDirs(mainJavaDirs)
+			exclude { element ->
+				isShadowed(element, overriddenSharedMainSources + overriddenInheritedMainSources, mainJavaDirs)
+			}
+		}
+		resources {
+			setSrcDirs(mainResourceDirs)
+			exclude { element ->
+					isShadowed(element, overriddenSharedMainResources + overriddenInheritedMainResources, mainResourceDirs)
+			}
+		}
+	}
+	client {
+		java {
+			setSrcDirs(clientJavaDirs)
+			exclude { element ->
+				isShadowed(element, overriddenSharedClientSources + overriddenInheritedClientSources, clientJavaDirs)
+			}
+		}
+		resources {
+			setSrcDirs(clientResourceDirs)
+			exclude { element ->
+					isShadowed(element, overriddenSharedClientResources + overriddenInheritedClientResources, clientResourceDirs)
+			}
+		}
+	}
+	test {
+		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')])
+		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/resources') + [project.file('src/test/resources')])
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${minecraftVersion}"
+	if (config.officialMappings) {
+		mappings loom.officialMojangMappings()
+	}
+	add(config.fabricDependencyConfiguration, "net.fabricmc:fabric-loader:${config.loaderVersion}")
+	add(config.fabricDependencyConfiguration, "net.fabricmc.fabric-api:fabric-api:${config.fabricVersion}")
+
+	// Mod Menu 只做编译期依赖：没装 Mod Menu 的玩家不会受影响，装了才出现配置入口
+	if (config.modmenuVersion) {
+		// MC 1.20.1 / 1.21.1 走 loom-remap，用 modCompileOnly；
+		// MC 26.2 走不重映射的 loom 配置（fabricDependencyConfiguration = implementation），
+		// 没有 modCompileOnly 这个配置，改用普通 compileOnly
+		def modmenuConfiguration = config.fabricDependencyConfiguration == 'implementation' ? 'compileOnly' : 'modCompileOnly'
+		add(modmenuConfiguration, "com.terraformersmc:modmenu:${config.modmenuVersion}")
+	}
+
+	bundledLibrary 'org.tukaani:xz:1.10'
+	implementation 'org.tukaani:xz:1.10'
+	implementation "io.github.sebasbaumh:mapbox-vector-tile-java:${config.mapboxVersion}"
+	include "io.github.sebasbaumh:mapbox-vector-tile-java:${config.mapboxVersion}"
+	implementation "com.google.protobuf:protobuf-java:${config.protobufVersion}"
+	include "com.google.protobuf:protobuf-java:${config.protobufVersion}"
+	implementation "com.twelvemonkeys.imageio:imageio-webp:${twelveMonkeysImageioVersion}"
+	implementation "com.twelvemonkeys.imageio:imageio-core:${twelveMonkeysImageioVersion}"
+	implementation "com.twelvemonkeys.imageio:imageio-metadata:${twelveMonkeysImageioVersion}"
+	implementation "com.twelvemonkeys.common:common-lang:${twelveMonkeysImageioVersion}"
+	implementation "com.twelvemonkeys.common:common-io:${twelveMonkeysImageioVersion}"
+	implementation "com.twelvemonkeys.common:common-image:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.imageio:imageio-webp:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.imageio:imageio-core:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.imageio:imageio-metadata:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.common:common-lang:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.common:common-io:${twelveMonkeysImageioVersion}"
+	include "com.twelvemonkeys.common:common-image:${twelveMonkeysImageioVersion}"
+	implementation 'com.dylibso.chicory:runtime:1.7.5'
+	implementation 'com.dylibso.chicory:wasm:1.7.5'
+	implementation 'org.webjars.npm:lerc:4.0.4'
+	include 'com.dylibso.chicory:runtime:1.7.5'
+	include 'com.dylibso.chicory:wasm:1.7.5'
+	include 'org.webjars.npm:lerc:4.0.4'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+	if (config.testDistantHorizonsRuntime) {
+		testRuntimeOnly "maven.modrinth:DistantHorizonsApi:${distantHorizonsApiVersion}"
+	}
+
+	compileOnly "maven.modrinth:DistantHorizonsApi:${distantHorizonsApiVersion}"
+	if (distantHorizonsRuntimePath) {
+		if (usesLocalRuntimeMods) {
+			localRuntime files(distantHorizonsRuntimePath)
+		} else {
+			modRuntimeOnly files(distantHorizonsRuntimePath)
+		}
+	}
+}
+
+processResources {
+	inputs.property 'version', project.version
+
+	filesMatching('fabric.mod.json') {
+		expand version: inputs.properties.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = javaVersion
+}
+
+tasks.named('test').configure {
+	useJUnitPlatform()
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(javaVersion)
+	}
+
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.toVersion(javaVersion)
+	targetCompatibility = JavaVersion.toVersion(javaVersion)
+}
+
+jar {
+	inputs.property 'archivesName', project.base.archivesName
+
+	from({
+		configurations.bundledLibrary.collect { zipTree(it) }
+	}) {
+		exclude 'META-INF/MANIFEST.MF'
+	}
+
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${inputs.properties.archivesName}" }
+	}
+
+	from(rootProject.file('THIRD_PARTY_NOTICES.md')) {
+		rename { "THIRD_PARTY_NOTICES_${inputs.properties.archivesName}.md" }
+	}
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			artifactId = project.base.archivesName.get()
+			from components.java
+		}
+	}
+
+	repositories {
+	}
+}

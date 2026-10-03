@@ -3,16 +3,11 @@ package com.yucareux.tellus.cache;
 public enum TellusCacheDomain {
    OSM,
    LAND_COVER,
+   CANOPY_HEIGHT,
    KOPPEN,
    TERRAIN,
    NORMALIZED_TERRAIN,
-   SWISSALTI3D,
-   AHN,
-   CANELEVATION,
-   NORWAYDTM1,
-   JAPANGSI,
-   USGS,
-   ARCTICDEM,
-   REMA,
-   COPERNICUS
+   OPENWATERS,
+   OISST,
+   PRELOADED_TERRAIN
 }

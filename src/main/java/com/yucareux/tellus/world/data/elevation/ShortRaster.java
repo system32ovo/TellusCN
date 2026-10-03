@@ -14,14 +14,25 @@ final class ShortRaster {
    }
 
    static ShortRaster create(int width, int height) {
-      return new ShortRaster(width, height, new short[width * height]);
+      return new ShortRaster(width, height, new short[checkedSampleCount(width, height)]);
    }
 
    static ShortRaster wrap(int width, int height, short[] data) {
-      if (data.length != width * height) {
+      if (data.length != checkedSampleCount(width, height)) {
          throw new IllegalArgumentException("Invalid raster buffer");
       } else {
          return new ShortRaster(width, height, data);
+      }
+   }
+
+   private static int checkedSampleCount(int width, int height) {
+      if (width <= 0 || height <= 0) {
+         throw new IllegalArgumentException("Raster dimensions must be positive");
+      }
+      try {
+         return Math.multiplyExact(width, height);
+      } catch (ArithmeticException error) {
+         throw new IllegalArgumentException("Raster dimensions are too large", error);
       }
    }
 

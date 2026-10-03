@@ -44,8 +44,9 @@ public final class OverpassRoadClient {
       String singleEndpointProperty = System.getProperty("tellus.osm.overpass.endpoint");
       String endpointConfig;
       if (!mirrorEndpoint.isBlank()) {
-         // 使用镜像端点
-         endpointConfig = mirrorEndpoint;
+         // 使用镜像端点，并把官方公共实例追加在后面作为兜底：
+         // 镜像的 /overpass 路由失效时，下面的轮换重试逻辑会自动改走官方实例
+         endpointConfig = mirrorEndpoint + "," + DEFAULT_ENDPOINTS;
       } else if (endpointsProperty != null && !endpointsProperty.isBlank()) {
          endpointConfig = endpointsProperty;
       } else if (singleEndpointProperty != null && !singleEndpointProperty.isBlank()) {

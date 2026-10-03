@@ -1,8 +1,24 @@
 pluginManagement {
 	repositories {
 		maven {
+			name = 'NeoForge'
+			url = 'https://maven.neoforged.net/releases/'
+		}
+		maven {
 			name = 'Fabric'
 			url = 'https://maven.fabricmc.net/'
+		}
+		maven {
+			name = 'UniminedKappa'
+			url = 'https://maven.outlands.top/releases/'
+		}
+		maven {
+			name = 'Unimined'
+			url = 'https://maven.wagyourtail.xyz/releases/'
+		}
+		maven {
+			name = 'Forge'
+			url = 'https://maven.minecraftforge.net/'
 		}
 		mavenCentral()
 		gradlePluginPortal()
@@ -15,9 +31,34 @@ plugins {
 
 rootProject.name = 'Tellus'
 
-include('mc1211')
-include('mc261')
-include('mc1201')
+// 上游支持的全部目标（供 -PtellusTargets 显式选用）
+def availableTellusTargets = [
+	'mc1201',
+	'mc1201-forge',
+	'mc1211',
+	'mc1211-neoforge',
+	'mc12111',
+	'mc12111-neoforge',
+	'mc262',
+	'mc262-neoforge',
+]
+// TellusCN 默认只构建 Fabric 目标：forge / neoforge / 1.21.11 需要时再用
+// -PtellusTargets=mc1201,mc1211,mc262 这类写法显式指定，避免默认构建拉取额外加载器依赖
+def defaultTellusTargets = [
+	'mc1201',
+	'mc1211',
+	'mc262',
+]
+def requestedTellusTargets = providers.gradleProperty('tellusTargets').orNull
+def selectedTellusTargets = requestedTellusTargets == null
+	? defaultTellusTargets
+	: requestedTellusTargets.split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+// 喵~防御：显式指定的目标名必须存在于支持列表，拼错时立刻报错而不是静默跳过
+def unknownTellusTargets = selectedTellusTargets - availableTellusTargets
+if (!unknownTellusTargets.isEmpty()) {
+	throw new GradleException("Unknown Tellus target(s): ${unknownTellusTargets.join(', ')}")
+}
+selectedTellusTargets.each { include(it) }
 
 dependencyResolutionManagement {
 	repositories {

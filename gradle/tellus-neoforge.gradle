@@ -1,0 +1,303 @@
+def config = project.ext.tellus
+def minecraftVersion = config.minecraftVersion
+def neoForgeVersion = config.neoForgeVersion
+def javaVersion = config.javaVersion as int
+def sharedSourceLayers = config.sharedSourceLayers as List
+def sharedMainSourceLayers = (config.sharedMainSourceLayers ?: sharedSourceLayers) as List
+def sharedClientSourceLayers = (config.sharedClientSourceLayers ?: sharedSourceLayers) as List
+def sharedTestSourceLayers = (config.sharedTestSourceLayers ?: sharedMainSourceLayers) as List
+def inheritedJavaProjects = (config.inheritedJavaProjects ?: []) as List
+def inheritedMainJavaProjects = (config.inheritedMainJavaProjects ?: inheritedJavaProjects) as List
+def inheritedClientJavaProjects = (config.inheritedClientJavaProjects ?: inheritedJavaProjects) as List
+def inheritedResourceProjects = (config.inheritedResourceProjects ?: inheritedJavaProjects) as List
+def inheritedMainResourceProjects = (config.inheritedMainResourceProjects ?: inheritedResourceProjects) as List
+def inheritedClientResourceProjects = (config.inheritedClientResourceProjects ?: inheritedResourceProjects) as List
+def distantHorizonsApiVersion = '7.0.0'
+def twelveMonkeysImageioVersion = '3.13.1'
+def distantHorizonsRuntimePath = providers.gradleProperty(config.distantHorizonsRuntimeProperty).orNull
+def usesLegacyAdditionalRuntimeClasspath = minecraftVersion == '1.21.1'
+def inheritedMainJavaDirs = inheritedMainJavaProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/main/java")
+}
+def inheritedClientJavaDirs = inheritedClientJavaProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/client/java")
+}
+def overriddenSharedMainSources = (config.overriddenSharedMainSources ?: []) as Set
+def overriddenSharedClientSources = (config.overriddenSharedClientSources ?: []) as Set
+def overriddenInheritedMainSources = (config.overriddenInheritedMainSources ?: []) as Set
+def overriddenInheritedClientSources = (config.overriddenInheritedClientSources ?: []) as Set
+def inheritedMainResourceDirs = inheritedMainResourceProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/main/resources")
+}
+def inheritedClientResourceDirs = inheritedClientResourceProjects.collect { inheritedProject ->
+	rootProject.file("${inheritedProject}/src/client/resources")
+}
+def overriddenInheritedMainResources = (config.overriddenInheritedMainResources ?: []) as Set
+def overriddenInheritedClientResources = (config.overriddenInheritedClientResources ?: []) as Set
+def overriddenSharedMainResources = (config.overriddenSharedMainResources ?: []) as Set
+def overriddenSharedClientResources = (config.overriddenSharedClientResources ?: []) as Set
+def sharedMainJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/java')
+def sharedClientJavaDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/java')
+def sharedMainResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedMainSourceLayers, 'main/resources')
+def sharedClientResourceDirs = rootProject.ext.tellusSharedSourceDirs(sharedClientSourceLayers, 'client/resources')
+def mainJavaDirs = (sharedMainJavaDirs + sharedClientJavaDirs + inheritedMainJavaDirs + inheritedClientJavaDirs
+	+ [project.file('src/main/java'), project.file('src/client/java')])
+def mainResourceDirs = (sharedMainResourceDirs + sharedClientResourceDirs + inheritedMainResourceDirs + inheritedClientResourceDirs
+	+ [project.file('src/main/resources'), project.file('src/client/resources')])
+def isShadowed = { element, Set<String> overriddenPaths, List<File> sourceDirs ->
+	def relativePath = element.relativePath.pathString
+	if (!overriddenPaths.contains(relativePath)) {
+		return false
+	}
+	def owner = sourceDirs.reverse().find { sourceDir -> new File(sourceDir, relativePath).isFile() }
+	return owner != null && element.file.toPath().toAbsolutePath().normalize()
+		!= new File(owner, relativePath).toPath().toAbsolutePath().normalize()
+}
+
+base {
+	archivesName = "${rootProject.archives_base_name}-neoforge-${minecraftVersion}"
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+	archiveVersion.set(project.version.toString())
+}
+
+repositories {
+	mavenCentral()
+	maven {
+		url = 'https://api.modrinth.com/maven/'
+		content {
+			includeGroup 'maven.modrinth'
+		}
+	}
+}
+
+sourceSets {
+	main {
+		java {
+			setSrcDirs(mainJavaDirs)
+			exclude { element ->
+				isShadowed(
+					element,
+					overriddenSharedMainSources + overriddenSharedClientSources
+						+ overriddenInheritedMainSources + overriddenInheritedClientSources,
+					mainJavaDirs
+				)
+			}
+		}
+		resources {
+			setSrcDirs(mainResourceDirs)
+			exclude { element ->
+				isShadowed(
+					element,
+						overriddenSharedMainResources + overriddenSharedClientResources
+							+ overriddenInheritedMainResources + overriddenInheritedClientResources,
+					mainResourceDirs
+				)
+			}
+		}
+	}
+	test {
+		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/java') + [project.file('src/test/java')])
+		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedTestSourceLayers, 'test/resources') + [project.file('src/test/resources')])
+	}
+}
+
+neoForge {
+	version = neoForgeVersion
+
+	runs {
+		client {
+			client()
+		}
+
+		server {
+			server()
+			programArgument '--nogui'
+		}
+
+		configureEach {
+			systemProperty 'forge.logging.markers', 'REGISTRIES'
+			logLevel = org.slf4j.event.Level.INFO
+		}
+	}
+
+	mods {
+		tellus {
+			sourceSet(sourceSets.main)
+		}
+	}
+
+	unitTest {
+		enable()
+		testedMod = mods.tellus
+	}
+}
+
+configurations {
+	relocatedXz
+	lercWebjar
+	if (usesLegacyAdditionalRuntimeClasspath) {
+		additionalRuntimeClasspath.extendsFrom implementation
+	}
+	runtimeClasspath.extendsFrom localRuntime
+}
+
+dependencies {
+	compileOnly 'org.tukaani:xz:1.10'
+	relocatedXz 'org.tukaani:xz:1.10'
+	jarJar(implementation('io.github.sebasbaumh:mapbox-vector-tile-java:24.1.1') {
+		exclude group: 'org.slf4j', module: 'slf4j-api'
+	}) {
+		version {
+			strictly '[24.1.1,25.0)'
+			prefer '24.1.1'
+		}
+	}
+	jarJar(implementation('com.google.protobuf:protobuf-java:4.28.2')) {
+		version {
+			strictly '[4.28.2,5.0)'
+			prefer '4.28.2'
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.imageio:imageio-webp:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.imageio:imageio-core:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.imageio:imageio-metadata:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.common:common-lang:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.common:common-io:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation("com.twelvemonkeys.common:common-image:${twelveMonkeysImageioVersion}")) {
+		version {
+			strictly '[3.13.1,3.14)'
+			prefer twelveMonkeysImageioVersion
+		}
+	}
+	jarJar(implementation('com.dylibso.chicory:runtime:1.7.5')) {
+		version {
+			strictly '[1.7.5,1.8)'
+			prefer '1.7.5'
+		}
+	}
+	jarJar(implementation('com.dylibso.chicory:wasm:1.7.5')) {
+		version {
+			strictly '[1.7.5,1.8)'
+			prefer '1.7.5'
+		}
+	}
+	lercWebjar 'org.webjars.npm:lerc:4.0.4'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testImplementation 'org.tukaani:xz:1.10'
+	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+
+	compileOnly "maven.modrinth:DistantHorizonsApi:${distantHorizonsApiVersion}"
+	if (distantHorizonsRuntimePath) {
+		localRuntime files(distantHorizonsRuntimePath)
+	} else if (usesLegacyAdditionalRuntimeClasspath) {
+		additionalRuntimeClasspath 'org.tukaani:xz:1.10'
+	} else {
+		runtimeOnly 'org.tukaani:xz:1.10'
+	}
+}
+
+processResources {
+	inputs.property 'version', project.version
+	inputs.property 'minecraftVersion', minecraftVersion
+	inputs.property 'neoForgeVersion', neoForgeVersion
+
+	filesMatching('META-INF/neoforge.mods.toml') {
+		expand version: inputs.properties.version,
+			minecraftVersion: inputs.properties.minecraftVersion,
+			neoForgeVersion: inputs.properties.neoForgeVersion
+	}
+
+	from({ configurations.lercWebjar.collect { zipTree(it) } }) {
+		include 'META-INF/resources/webjars/lerc/4.0.4/lerc-wasm.wasm'
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release = javaVersion
+}
+
+tasks.named('test').configure {
+	useJUnitPlatform()
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(javaVersion)
+	}
+
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.toVersion(javaVersion)
+	targetCompatibility = JavaVersion.toVersion(javaVersion)
+}
+
+jar {
+	inputs.property 'archivesName', project.base.archivesName
+	archiveClassifier = 'unshaded'
+
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${inputs.properties.archivesName}" }
+	}
+
+	from(rootProject.file('THIRD_PARTY_NOTICES.md')) {
+		rename { "THIRD_PARTY_NOTICES_${inputs.properties.archivesName}.md" }
+	}
+}
+
+shadowJar {
+	dependsOn jarJar
+	archiveClassifier = ''
+	configurations = [project.configurations.relocatedXz]
+	from(layout.buildDirectory.dir('generated/jarJar'))
+	relocate 'org.tukaani.xz', 'com.yucareux.tellus.shaded.org.tukaani.xz'
+
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${project.base.archivesName.get()}" }
+	}
+
+	from(rootProject.file('THIRD_PARTY_NOTICES.md')) {
+		rename { "THIRD_PARTY_NOTICES_${project.base.archivesName.get()}.md" }
+	}
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			artifactId = project.base.archivesName.get()
+			from components.java
+		}
+	}
+
+	repositories {
+	}
+}

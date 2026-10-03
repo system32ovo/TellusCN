@@ -9,8 +9,9 @@ public final class OverpassRoadTile {
    private static final int GRID_X = 8;
    private static final int GRID_Y = 8;
    private static final int BUCKET_COUNT = GRID_X * GRID_Y;
-   private static final OverpassRoadTile EMPTY = new OverpassRoadTile(List.of());
+   private static final OverpassRoadTile EMPTY = new OverpassRoadTile(List.of(), List.of());
    private final List<RoadFeature> features;
+   private final List<RoadAreaFeature> areaFeatures;
    private final double tileSouth;
    private final double tileWest;
    private final double tileNorth;
@@ -18,11 +19,22 @@ public final class OverpassRoadTile {
    private final int[][] bucketFeatureIndices;
 
    public OverpassRoadTile(List<RoadFeature> features) {
-      this(features, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+      this(features, List.of(), Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+   }
+
+   public OverpassRoadTile(List<RoadFeature> features, List<RoadAreaFeature> areaFeatures) {
+      this(features, areaFeatures, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
    }
 
    public OverpassRoadTile(List<RoadFeature> features, double tileSouth, double tileWest, double tileNorth, double tileEast) {
+      this(features, List.of(), tileSouth, tileWest, tileNorth, tileEast);
+   }
+
+   public OverpassRoadTile(
+      List<RoadFeature> features, List<RoadAreaFeature> areaFeatures, double tileSouth, double tileWest, double tileNorth, double tileEast
+   ) {
       this.features = List.copyOf(Objects.requireNonNull(features, "features"));
+      this.areaFeatures = List.copyOf(Objects.requireNonNull(areaFeatures, "areaFeatures"));
       this.tileSouth = tileSouth;
       this.tileWest = tileWest;
       this.tileNorth = tileNorth;
@@ -30,13 +42,16 @@ public final class OverpassRoadTile {
       this.bucketFeatureIndices = this.buildSpatialIndex();
    }
 
-   
    public static OverpassRoadTile empty() {
       return Objects.requireNonNull(EMPTY, "emptyOverpassRoadTile");
    }
 
    public List<RoadFeature> features() {
       return this.features;
+   }
+
+   public List<RoadAreaFeature> areaFeatures() {
+      return this.areaFeatures;
    }
 
    public double tileSouth() {
@@ -56,7 +71,7 @@ public final class OverpassRoadTile {
    }
 
    public boolean isEmpty() {
-      return this.features.isEmpty();
+      return this.features.isEmpty() && this.areaFeatures.isEmpty();
    }
 
    public List<RoadFeature> featuresInBounds(double south, double west, double north, double east) {
@@ -106,18 +121,37 @@ public final class OverpassRoadTile {
             } else {
                return List.of();
             }
-         } else {
+	         } else {
 	            List<RoadFeature> matches = new ArrayList<>(this.features.size());
 
-            for (RoadFeature feature : this.features) {
-               if (feature.intersects(minSouth, minWest, maxNorth, maxEast)) {
-                  matches.add(feature);
-               }
-            }
+	            for (RoadFeature feature : this.features) {
+	               if (feature.intersects(minSouth, minWest, maxNorth, maxEast)) {
+	                  matches.add(feature);
+	               }
+	            }
 
             return matches.isEmpty() ? List.of() : matches;
          }
       }
+   }
+
+   public List<RoadAreaFeature> areaFeaturesInBounds(double south, double west, double north, double east) {
+      if (this.areaFeatures.isEmpty()) {
+         return List.of();
+      }
+
+      double minSouth = Math.min(south, north);
+      double maxNorth = Math.max(south, north);
+      double minWest = Math.min(west, east);
+      double maxEast = Math.max(west, east);
+      List<RoadAreaFeature> matches = new ArrayList<>(this.areaFeatures.size());
+      for (RoadAreaFeature feature : this.areaFeatures) {
+         if (feature.intersects(minSouth, minWest, maxNorth, maxEast)) {
+            matches.add(feature);
+         }
+      }
+
+      return matches.isEmpty() ? List.of() : matches;
    }
 
    private int[][] buildSpatialIndex() {

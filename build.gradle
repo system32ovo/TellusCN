@@ -5,77 +5,97 @@ plugins {
 group = project.maven_group
 version = project.mod_version + "-Tellus" + project.tellus_version
 
+// Version projects are thin compatibility overlays. Keep source implementations in
+// the narrowest shared layer that supports them instead of copying them per target.
+ext.tellusSharedSourceDirs = { Collection<String> layers, String sourcePath ->
+	[rootProject.file("src/${sourcePath}")] + layers.collect { layer ->
+		rootProject.file("shared/${layer}/src/${sourcePath}")
+	}
+}
+
 subprojects {
 	group = rootProject.group
 	version = rootProject.version
 }
 
-tasks.named('clean') {
-	dependsOn(':mc1201:clean', ':mc1211:clean', ':mc261:clean')
+def tellusTargets = [
+	[project: 'mc1201', suffix: '1201', label: 'Minecraft 1.20.1 Fabric', loader: 'fabric'],
+	[project: 'mc1201-forge', suffix: '1201Forge', label: 'Minecraft 1.20.1 Forge', loader: 'forge'],
+	[project: 'mc1211', suffix: '1211', label: 'Minecraft 1.21.1 Fabric', loader: 'fabric'],
+	[project: 'mc1211-neoforge', suffix: '1211NeoForge', label: 'Minecraft 1.21.1 NeoForge', loader: 'neoforge'],
+	[project: 'mc12111', suffix: '12111', label: 'Minecraft 1.21.11 Fabric', loader: 'fabric'],
+	[project: 'mc12111-neoforge', suffix: '12111NeoForge', label: 'Minecraft 1.21.11 NeoForge', loader: 'neoforge'],
+	[project: 'mc262', suffix: '262', label: 'Minecraft 26.2 Fabric', loader: 'fabric'],
+	[project: 'mc262-neoforge', suffix: '262NeoForge', label: 'Minecraft 26.2 NeoForge', loader: 'neoforge'],
+].findAll { target -> findProject(":${target.project}") != null }
+
+['clean', 'assemble', 'check', 'build'].each { lifecycleTask ->
+	tasks.named(lifecycleTask) {
+		dependsOn(tellusTargets.collect { target -> ":${target.project}:${lifecycleTask}" })
+	}
 }
 
-tasks.named('assemble') {
-	dependsOn(':mc1201:assemble', ':mc1211:assemble', ':mc261:assemble')
+tellusTargets.each { target ->
+	tasks.register("build${target.suffix}") {
+		group = 'build'
+		description = "Builds the ${target.label} target."
+		dependsOn(":${target.project}:build")
+	}
+
+	['Client', 'Server'].each { side ->
+		tasks.register("run${side}${target.suffix}") {
+			group = target.loader
+			description = "Runs the ${target.label} ${side.toLowerCase()} target."
+			dependsOn(":${target.project}:run${side}")
+		}
+	}
+}
+
+def duplicationCheckRoots = [rootProject.file('src'), rootProject.file('shared')] + tellusTargets.collect { target ->
+	rootProject.file("${target.project}/src")
+}
+
+tasks.register('checkVersionSourceDuplication') {
+	group = 'verification'
+	description = 'Fails when identical Java implementations are copied into more than one source layer.'
+	inputs.files(duplicationCheckRoots.collect { sourceRoot -> fileTree(sourceRoot) { include '**/*.java' } })
+
+	doLast {
+		def copiesByImplementation = [:].withDefault { [] }
+		duplicationCheckRoots.each { sourceRoot ->
+			fileTree(sourceRoot) { include '**/*.java' }.files.each { sourceFile ->
+				def normalizedPath = sourceFile.absolutePath.replace('\\', '/')
+				def matcher = normalizedPath =~ /.*\/src\/(main|client|test)\/java\/(.+)$/
+				if (matcher.matches()) {
+					def relativePath = "src/${matcher.group(1)}/java/${matcher.group(2)}"
+					def implementation = sourceFile.readLines('UTF-8')
+						.findAll { line ->
+							def trimmed = line.trim()
+							return !trimmed.isEmpty() && ![
+								'import net.fabricmc.api.EnvType;',
+								'import net.fabricmc.api.Environment;',
+								'@Environment(EnvType.CLIENT)',
+							].contains(trimmed)
+						}
+						.collect { line -> line.replaceFirst(/[ \\t]+$/, '') }
+						.join('\n')
+					def digest = java.security.MessageDigest.getInstance('SHA-256')
+						.digest(implementation.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+						.encodeHex()
+						.toString()
+					copiesByImplementation["${relativePath}:${digest}"] << sourceFile
+				}
+			}
+		}
+
+		def duplicates = copiesByImplementation.values().findAll { copies -> copies.size() > 1 }
+		if (!duplicates.isEmpty()) {
+			def details = duplicates.collect { copies -> copies.collect { file -> rootProject.relativePath(file) }.join('\n  ') }.join('\n\n  ')
+			throw new GradleException("Identical version source files must be moved to a shared layer:\n  ${details}")
+		}
+	}
 }
 
 tasks.named('check') {
-	dependsOn(':mc1201:check', ':mc1211:check', ':mc261:check')
-}
-
-tasks.named('build') {
-	dependsOn(':mc1201:build', ':mc1211:build', ':mc261:build')
-}
-
-tasks.register('build1201') {
-	group = 'build'
-	description = 'Builds the Minecraft 1.20.1 Fabric target.'
-	dependsOn(':mc1201:build')
-}
-
-tasks.register('build1211') {
-	group = 'build'
-	description = 'Builds the Minecraft 1.21.1 Fabric target.'
-	dependsOn(':mc1211:build')
-}
-
-tasks.register('build261') {
-	group = 'build'
-	description = 'Builds the Minecraft 26.1.2 Fabric target.'
-	dependsOn(':mc261:build')
-}
-
-tasks.register('runClient1211') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 1.21.1 client target.'
-	dependsOn(':mc1211:runClient')
-}
-
-tasks.register('runClient1201') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 1.20.1 client target.'
-	dependsOn(':mc1201:runClient')
-}
-
-tasks.register('runClient261') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 26.1.2 client target.'
-	dependsOn(':mc261:runClient')
-}
-
-tasks.register('runServer1201') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 1.20.1 server target.'
-	dependsOn(':mc1201:runServer')
-}
-
-tasks.register('runServer1211') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 1.21.1 server target.'
-	dependsOn(':mc1211:runServer')
-}
-
-tasks.register('runServer261') {
-	group = 'fabric'
-	description = 'Runs the Minecraft 26.1.2 server target.'
-	dependsOn(':mc261:runServer')
+	dependsOn(tasks.named('checkVersionSourceDuplication'))
 }

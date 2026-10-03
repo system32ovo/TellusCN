@@ -1,0 +1,241 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+	id 'xyz.wagyourtail.unimined' version '1.4.18-kappa'
+	id 'com.gradleup.shadow' version '9.0.0'
+}
+
+def minecraftVersion = '1.20.1'
+def forgeVersion = '47.4.20'
+def distantHorizonsApiVersion = '7.0.0'
+def twelveMonkeysImageioVersion = '3.13.1'
+def javaVersion = 17
+def distantHorizonsRuntimePath = providers.gradleProperty('mc1201_forge_distant_horizons_runtime_path').orNull
+def distantHorizonsRuntimeFile = distantHorizonsRuntimePath ? file(distantHorizonsRuntimePath) : null
+def sharedSourceLayers = ['pre-26', 'mc1201', 'forge-family', 'pre-26-forge']
+def overriddenSharedMainSources = [
+	'com/yucareux/tellus/network/GeoTpOpenMapPayload.java',
+	'com/yucareux/tellus/network/GeoTpTeleportPayload.java',
+	'com/yucareux/tellus/worldgen/EarthBiomeSource.java',
+] as Set
+def sharedMainJavaPath = rootProject.file('src/main/java').toPath().toAbsolutePath().normalize()
+def sharedClientJavaPath = rootProject.file('src/client/java').toPath().toAbsolutePath().normalize()
+
+base {
+	archivesName = "${rootProject.archives_base_name}-forge-${minecraftVersion}"
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+	archiveVersion.set(project.version.toString())
+}
+
+repositories {
+	mavenCentral()
+	if (distantHorizonsRuntimeFile) {
+		flatDir {
+			dirs distantHorizonsRuntimeFile.parentFile
+		}
+	}
+	maven {
+		url = 'https://api.modrinth.com/maven/'
+		content {
+			includeGroup 'maven.modrinth'
+		}
+	}
+	maven {
+		url = 'https://maven.minecraftforge.net/'
+	}
+}
+
+unimined.minecraft {
+	version minecraftVersion
+
+	mappings {
+		mojmap()
+		devNamespace 'mojmap'
+	}
+
+	forge {
+		loader forgeVersion
+		useToolchains = false
+		mixinConfig(['tellus.mixins.json', 'tellus.client.mixins.json'])
+	}
+}
+
+sourceSets {
+	main {
+		java {
+			setSrcDirs(
+				rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'main/java')
+					+ rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'client/java')
+					+ [project.file('src/main/java'), project.file('src/client/java')]
+			)
+			exclude { element ->
+				(overriddenSharedMainSources.contains(element.relativePath.pathString)
+					&& element.file.toPath().toAbsolutePath().normalize().startsWith(sharedMainJavaPath))
+					|| (element.relativePath.pathString == 'com/yucareux/tellus/mixin/client/PresetEditorMixin.java'
+					&& element.file.toPath().toAbsolutePath().normalize().startsWith(sharedClientJavaPath))
+			}
+		}
+		resources {
+			setSrcDirs(
+				rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'main/resources')
+					+ rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'client/resources')
+					+ [project.file('src/main/resources'), project.file('src/client/resources')]
+			)
+		}
+	}
+	test {
+		java.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'test/java') + [project.file('src/test/java')])
+		resources.setSrcDirs(rootProject.ext.tellusSharedSourceDirs(sharedSourceLayers, 'test/resources') + [project.file('src/test/resources')])
+	}
+}
+
+unimined.minecraft(sourceSets.test) {
+	combineWith(sourceSets.main)
+	runs.off = true
+	createJarTask = false
+	defaultRemapJar = false
+	defaultRemapSourcesJar = false
+}
+
+configurations {
+	shade
+	implementation.extendsFrom(shade)
+}
+
+dependencies {
+	shade 'org.tukaani:xz:1.10'
+	shade('io.github.sebasbaumh:mapbox-vector-tile-java:23.2.0') {
+		exclude group: 'org.slf4j', module: 'slf4j-api'
+	}
+	shade 'com.google.protobuf:protobuf-java:3.25.5'
+	shade "com.twelvemonkeys.imageio:imageio-webp:${twelveMonkeysImageioVersion}"
+	shade "com.twelvemonkeys.imageio:imageio-core:${twelveMonkeysImageioVersion}"
+	shade "com.twelvemonkeys.imageio:imageio-metadata:${twelveMonkeysImageioVersion}"
+	shade "com.twelvemonkeys.common:common-lang:${twelveMonkeysImageioVersion}"
+	shade "com.twelvemonkeys.common:common-io:${twelveMonkeysImageioVersion}"
+	shade "com.twelvemonkeys.common:common-image:${twelveMonkeysImageioVersion}"
+	shade 'com.dylibso.chicory:runtime:1.7.5'
+	shade 'com.dylibso.chicory:wasm:1.7.5'
+	shade 'org.webjars.npm:lerc:4.0.4'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+
+	compileOnly "maven.modrinth:DistantHorizonsApi:${distantHorizonsApiVersion}"
+	if (distantHorizonsRuntimeFile) {
+		modImplementation name: distantHorizonsRuntimeFile.name.replaceFirst(/\.jar$/, '')
+	}
+}
+
+processResources {
+	inputs.property 'version', project.version
+	inputs.property 'minecraftVersion', minecraftVersion
+	inputs.property 'forgeVersion', forgeVersion
+
+	filesMatching('META-INF/mods.toml') {
+		expand version: inputs.properties.version,
+			minecraftVersion: inputs.properties.minecraftVersion,
+			forgeVersion: inputs.properties.forgeVersion
+	}
+
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release = javaVersion
+}
+
+tasks.named('test').configure {
+	useJUnitPlatform()
+	// Raw JUnit bootstrap does not run Forge's ModLauncher transformers, so the
+	// registry/bootstrap tests trip Forge NetworkHooks before reaching Tellus.
+	// These same shared tests remain enabled on the 1.20.1 Fabric target.
+	exclude '**/TerrainTilesResolutionIndexTest.class'
+	exclude '**/RandomBiomeMixerRegistrySafetyTest.class'
+	exclude '**/ThinShellSurfaceOreTest.class'
+	exclude '**/UndergroundFeatureClassifierTest.class'
+	exclude '**/TellusBuildingStylesTest.class'
+	exclude '**/TellusEmptyBeardifierTest.class'
+	exclude '**/TellusVanillaNoiseCaveSamplerTest.class'
+}
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(javaVersion)
+	}
+
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.toVersion(javaVersion)
+	targetCompatibility = JavaVersion.toVersion(javaVersion)
+}
+
+jar {
+	inputs.property 'archivesName', project.base.archivesName
+	archiveClassifier = 'unshaded'
+
+	from(rootProject.file('LICENSE')) {
+		rename { "${it}_${inputs.properties.archivesName}" }
+	}
+
+	from(rootProject.file('THIRD_PARTY_NOTICES.md')) {
+		rename { "THIRD_PARTY_NOTICES_${inputs.properties.archivesName}.md" }
+	}
+}
+
+shadowJar {
+	archiveClassifier = 'dev-shadow'
+	configurations = [project.configurations.shade]
+	relocate 'org.tukaani.xz', 'com.yucareux.tellus.shaded.org.tukaani.xz'
+	relocate 'io.github.sebasbaumh.mapbox', 'com.yucareux.tellus.shaded.io.github.sebasbaumh.mapbox'
+	relocate 'org.locationtech.jts', 'com.yucareux.tellus.shaded.org.locationtech.jts'
+	relocate 'com.google.protobuf', 'com.yucareux.tellus.shaded.com.google.protobuf'
+	relocate 'com.twelvemonkeys', 'com.yucareux.tellus.shaded.com.twelvemonkeys'
+	mergeServiceFiles()
+	manifest {
+		attributes 'MixinConfigs': 'tellus.mixins.json,tellus.client.mixins.json'
+	}
+
+	from(rootProject.file('THIRD_PARTY_NOTICES.md')) {
+		rename { "THIRD_PARTY_NOTICES_${project.base.archivesName.get()}.md" }
+	}
+}
+
+afterEvaluate {
+	tasks.named('remapJar').configure {
+		dependsOn(tasks.named('shadowJar'))
+		inputFile.set(tasks.named('shadowJar').flatMap { it.archiveFile })
+		archiveClassifier.set('')
+	}
+
+	def shadedPaths = configurations.shade.resolve().collect { it.path }.toSet()
+	def loaderPaths = configurations.minecraftLibraries.resolve().collect { it.path }.toSet()
+	tasks.withType(JavaExec).configureEach { runTask ->
+		dependsOn(tasks.named('shadowJar'))
+		environment 'MOD_CLASSES', "_mc1201-forge_main%%${tasks.named('shadowJar').get().archiveFile.get().asFile.path}"
+		classpath = files(tasks.named('shadowJar').flatMap { it.archiveFile }) + classpath.filter { file ->
+			file != tasks.named('shadowJar').get().archiveFile.get().asFile
+				&& !file.path.contains(layout.buildDirectory.get().asFile.path)
+				&& !(shadedPaths.contains(file.path) && !loaderPaths.contains(file.path))
+		}
+	}
+}
+
+tasks.named('assemble').configure {
+	dependsOn(tasks.named('remapJar'))
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) {
+			artifactId = project.base.archivesName.get()
+			from components.java
+		}
+	}
+
+	repositories {
+	}
+}

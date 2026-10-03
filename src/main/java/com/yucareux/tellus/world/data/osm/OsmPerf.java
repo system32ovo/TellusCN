@@ -18,6 +18,12 @@ public final class OsmPerf {
    private static final LongAdder FULL_CHUNK_BUILDING_RASTER_NS = new LongAdder();
    private static final LongAdder FULL_CHUNK_BUILDING_CALLS = new LongAdder();
    private static final LongAdder FULL_CHUNK_BUILDING_FEATURES = new LongAdder();
+   private static final LongAdder DH_ROAD_MASK_NS = new LongAdder();
+   private static final LongAdder DH_ROAD_MASK_CALLS = new LongAdder();
+   private static final LongAdder DH_ROAD_MASK_FEATURES = new LongAdder();
+   private static final LongAdder DH_BUILDING_MASK_NS = new LongAdder();
+   private static final LongAdder DH_BUILDING_MASK_CALLS = new LongAdder();
+   private static final LongAdder DH_BUILDING_MASK_FEATURES = new LongAdder();
    private static final LongAdder WATER_QUERY_NS = new LongAdder();
    private static final LongAdder WATER_QUERY_CALLS = new LongAdder();
    private static final LongAdder WATER_QUERY_FEATURES = new LongAdder();
@@ -80,9 +86,29 @@ public final class OsmPerf {
    }
 
    public static void recordDhRoadMaskBuild(long totalNs, int features) {
+      if (ENABLED) {
+         DH_ROAD_MASK_CALLS.increment();
+         if (totalNs > 0L) {
+            DH_ROAD_MASK_NS.add(totalNs);
+         }
+         if (features > 0) {
+            DH_ROAD_MASK_FEATURES.add(features);
+         }
+         maybeLog();
+      }
    }
 
    public static void recordDhBuildingMaskBuild(long totalNs, int features) {
+      if (ENABLED) {
+         DH_BUILDING_MASK_CALLS.increment();
+         if (totalNs > 0L) {
+            DH_BUILDING_MASK_NS.add(totalNs);
+         }
+         if (features > 0) {
+            DH_BUILDING_MASK_FEATURES.add(features);
+         }
+         maybeLog();
+      }
    }
 
    public static void recordWaterQuery(long totalNs, int features) {
@@ -161,6 +187,12 @@ public final class OsmPerf {
       long buildingRasterNs = FULL_CHUNK_BUILDING_RASTER_NS.sumThenReset();
       long buildingCalls = FULL_CHUNK_BUILDING_CALLS.sumThenReset();
       long buildingFeatures = FULL_CHUNK_BUILDING_FEATURES.sumThenReset();
+      long dhRoadMaskNs = DH_ROAD_MASK_NS.sumThenReset();
+      long dhRoadMaskCalls = DH_ROAD_MASK_CALLS.sumThenReset();
+      long dhRoadMaskFeatures = DH_ROAD_MASK_FEATURES.sumThenReset();
+      long dhBuildingMaskNs = DH_BUILDING_MASK_NS.sumThenReset();
+      long dhBuildingMaskCalls = DH_BUILDING_MASK_CALLS.sumThenReset();
+      long dhBuildingMaskFeatures = DH_BUILDING_MASK_FEATURES.sumThenReset();
       long waterQueryNs = WATER_QUERY_NS.sumThenReset();
       long waterQueryCalls = WATER_QUERY_CALLS.sumThenReset();
       long waterQueryFeatures = WATER_QUERY_FEATURES.sumThenReset();
@@ -193,7 +225,7 @@ public final class OsmPerf {
 
       Tellus.LOGGER
          .info(
-            "OSM perf 15s: fullChunkRoad(fetch={}ms,raster={}ms,calls={},features={}) fullChunkBuilding(fetch={}ms,raster={}ms,calls={},features={}) waterQuery(total={}ms,calls={},features={}) waterChunk(total={}ms,calls={},cached={},deferredFallback={},blocking={}) tileLoads={}",
+            "OSM perf 15s: fullChunkRoad(fetch={}ms,raster={}ms,calls={},features={}) fullChunkBuilding(fetch={}ms,raster={}ms,calls={},features={}) dhRoadMask(total={}ms,calls={},features={}) dhBuildingMask(total={}ms,calls={},features={}) waterQuery(total={}ms,calls={},features={}) waterChunk(total={}ms,calls={},cached={},deferredFallback={},blocking={}) tileLoads={}",
             new Object[]{
                toMillis(roadFetchNs),
                toMillis(roadRasterNs),
@@ -203,6 +235,12 @@ public final class OsmPerf {
                toMillis(buildingRasterNs),
                buildingCalls,
                buildingFeatures,
+               toMillis(dhRoadMaskNs),
+               dhRoadMaskCalls,
+               dhRoadMaskFeatures,
+               toMillis(dhBuildingMaskNs),
+               dhBuildingMaskCalls,
+               dhBuildingMaskFeatures,
                toMillis(waterQueryNs),
                waterQueryCalls,
                waterQueryFeatures,
@@ -242,7 +280,8 @@ public final class OsmPerf {
       OSM_ROADS("osmRoads"),
       OSM_WATER("osmWater"),
       OSM_BUILDINGS("osmBuildings"),
-      OSM_SAND("osmSand");
+      OSM_SAND("osmSand"),
+      OSM_STREET_LIGHTS("osmStreetLights");
 
       private final String logId;
 

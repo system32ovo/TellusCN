@@ -5,8 +5,16 @@
 	"mixins": [
 		"BiomeFreezeMixin",
 		"BiomePrecipitationMixin",
+		"BlockPosHighYMixin",
+		"ChunkSerializerHighYMixin",
+		"DistantHorizonsChunkUpdateMixin",
+		"DimensionTypeHighYMixin",
+		"HeightRangePlacementMixin",
+		"LevelHighYPackedCoordinateMixin",
+		"MinecraftServerInitialSpawnMixin",
 		"OceanMonumentBuildingMixin",
-		"OceanMonumentStructureMixin"
+		"OceanMonumentStructureMixin",
+		"WaterSourceConversionMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

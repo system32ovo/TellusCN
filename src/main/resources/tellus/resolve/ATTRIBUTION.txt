@@ -1,0 +1,27 @@
+RESOLVE Ecoregions 2017
+========================
+
+Source:
+  RESOLVE Biodiversity and Wildlife Solutions
+  https://ecoregions.appspot.com/
+  https://doi.org/10.1093/biosci/bix014
+
+Citation:
+  Dinerstein et al. (2017), "An Ecoregion-Based Approach to Protecting
+  Half the Terrestrial Realm", BioScience 67(6), 534-545.
+
+Original dataset license:
+  Creative Commons Attribution 4.0 International (CC BY 4.0)
+  https://creativecommons.org/licenses/by/4.0/
+
+Tellus transformation:
+  The original Ecoregions2017 shapefile was converted into a global,
+  30-arc-second ecoregion-ID lookup. Each latitude row is run-length encoded
+  and the resulting binary is compressed with XZ. Center-point rasterization
+  is authoritative; otherwise-empty coastal and small-island cells are filled
+  only when touched by a source polygon. Source feature order is preserved to
+  resolve overlapping polygons deterministically.
+
+The transformed lookup retains the source ECO_ID values and is used together
+with ESA WorldCover and Köppen-Geiger climate data for Tellus biome
+classification.

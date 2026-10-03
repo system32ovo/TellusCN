@@ -25,10 +25,23 @@ public final class DownloadProgressReporter {
       };
    }
 
+   static DownloadProgressReporter.Listener currentListener() {
+      return LISTENER.get();
+   }
+
    public static void requestStarted(long expectedBytes) {
       DownloadProgressReporter.Listener listener = LISTENER.get();
       if (listener != null) {
          listener.onRequestStarted(expectedBytes);
+      }
+   }
+
+   public static void expectedBytesKnown(long expectedBytes) {
+      if (expectedBytes > 0L) {
+         DownloadProgressReporter.Listener listener = LISTENER.get();
+         if (listener != null) {
+            listener.onExpectedBytesKnown(expectedBytes);
+         }
       }
    }
 
@@ -49,13 +62,23 @@ public final class DownloadProgressReporter {
    }
 
    public static byte[] readAllBytesWithProgress(InputStream input) throws IOException {
+      return readAllBytesWithProgress(input, Integer.MAX_VALUE);
+   }
+
+   public static byte[] readAllBytesWithProgress(InputStream input, int maxBytes) throws IOException {
       Objects.requireNonNull(input, "input");
+      if (maxBytes <= 0) {
+         throw new IllegalArgumentException("Download byte limit must be positive");
+      }
       ByteArrayOutputStream output = new ByteArrayOutputStream(8192);
       byte[] buffer = new byte[8192];
 
       int read;
       while ((read = input.read(buffer)) >= 0) {
          if (read != 0) {
+            if (output.size() > maxBytes - read) {
+               throw new IOException("Download exceeds the " + maxBytes + " byte safety limit");
+            }
             output.write(buffer, 0, read);
             bytesRead(read);
          }
@@ -65,6 +88,9 @@ public final class DownloadProgressReporter {
    }
 
    public interface Listener {
+      default void onExpectedBytesKnown(long expectedBytes) {
+      }
+
       void onRequestStarted(long var1);
 
       void onBytesRead(int var1);

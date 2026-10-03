@@ -134,4 +134,39 @@ final class TerrainAnomalyRepair {
          }
       }
    }
+
+   static void repairHeightGrid(int[] heights, boolean[] repairMask, int width, int minY, int maxY) {
+      if (width <= 0 || (long)width * width != heights.length || repairMask.length != heights.length) {
+         throw new IllegalArgumentException("Mismatched terrain anomaly grid dimensions");
+      }
+
+      int[] source = heights.clone();
+      for (int z = 0; z < width; z++) {
+         for (int x = 0; x < width; x++) {
+            int index = x + z * width;
+            int repaired = source[index];
+            if (repairMask[index]) {
+               repaired = repairHeightFromNeighbors(
+                  source[index],
+                  gridHeight(source, width, x + 1, z),
+                  gridHeight(source, width, x - 1, z),
+                  gridHeight(source, width, x, z - 1),
+                  gridHeight(source, width, x, z + 1),
+                  gridHeight(source, width, x + 1, z - 1),
+                  gridHeight(source, width, x - 1, z - 1),
+                  gridHeight(source, width, x + 1, z + 1),
+                  gridHeight(source, width, x - 1, z + 1)
+               );
+            }
+
+            heights[index] = Math.max(minY, Math.min(maxY, repaired));
+         }
+      }
+   }
+
+   private static int gridHeight(int[] heights, int width, int x, int z) {
+      return x < 0 || x >= width || z < 0 || z >= width
+         ? Integer.MIN_VALUE
+         : heights[x + z * width];
+   }
 }

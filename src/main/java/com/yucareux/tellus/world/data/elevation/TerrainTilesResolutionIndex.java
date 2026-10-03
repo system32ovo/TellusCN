@@ -14,6 +14,11 @@ final class TerrainTilesResolutionIndex {
    private static final int VERSION = 0;
    private static final int LON_CELLS = 360;
    private static final int LAT_CELLS = 180;
+   private static final int MAX_XZ_MEMORY_KIB = 64 * 1024;
+   private static final int MAX_REFERENCE_COUNT = 2_000_000;
+   private static final int MAX_POLYGON_COUNT = 250_000;
+   private static final int MAX_RING_COUNT = 500_000;
+   private static final int MAX_POINT_COUNT = 5_000_000;
    private final String resourcePath;
    private final ThreadLocal<TerrainTilesResolutionIndex.LookupState> lookupState = ThreadLocal.withInitial(TerrainTilesResolutionIndex.LookupState::new);
    private volatile TerrainTilesResolutionIndex.Index index;
@@ -146,7 +151,7 @@ final class TerrainTilesResolutionIndex {
             Tellus.LOGGER.warn("Terrain Tiles resolution index resource missing at {}.", this.resourcePath);
             return TerrainTilesResolutionIndex.Index.unavailable();
          } else {
-            try (SingleXZInputStream xz = new SingleXZInputStream(raw); DataInputStream input = new DataInputStream(xz)) {
+            try (SingleXZInputStream xz = new SingleXZInputStream(raw, MAX_XZ_MEMORY_KIB); DataInputStream input = new DataInputStream(xz)) {
                byte[] magic = new byte[MAGIC.length];
                input.readFully(magic);
                if (!Arrays.equals(magic, MAGIC)) {
@@ -165,12 +170,17 @@ final class TerrainTilesResolutionIndex {
                      if (lonCells != LON_CELLS || latCells != LAT_CELLS) {
                         throw new IOException("Unexpected Terrain Tiles resolution grid " + lonCells + "x" + latCells);
                      } else {
+                        requireCount("reference", refCount, MAX_REFERENCE_COUNT);
+                        requireCount("polygon", polygonCount, MAX_POLYGON_COUNT);
+                        requireCount("ring", ringCount, MAX_RING_COUNT);
+                        requireCount("point", pointCount, MAX_POINT_COUNT);
                         int[] cellStarts = new int[lonCells * latCells];
                         int[] cellCounts = new int[lonCells * latCells];
 
                         for (int i = 0; i < cellStarts.length; i++) {
                            cellStarts[i] = input.readInt();
                            cellCounts[i] = input.readInt();
+                           requireSlice("cell reference", cellStarts[i], cellCounts[i], refCount);
                         }
 
                         float[] polygonMinLon = new float[polygonCount];
@@ -189,6 +199,18 @@ final class TerrainTilesResolutionIndex {
                            polygonRingStart[i] = input.readInt();
                            polygonRingCount[i] = input.readInt();
                            polygonResolutionMeters[i] = input.readFloat();
+                           if (!Float.isFinite(polygonMinLon[i])
+                              || !Float.isFinite(polygonMinLat[i])
+                              || !Float.isFinite(polygonMaxLon[i])
+                              || !Float.isFinite(polygonMaxLat[i])
+                              || polygonMinLon[i] > polygonMaxLon[i]
+                              || polygonMinLat[i] > polygonMaxLat[i]
+                              || !Float.isFinite(polygonResolutionMeters[i])
+                              || polygonResolutionMeters[i] <= 0.0F) {
+                              throw new IOException("Invalid Terrain Tiles polygon metadata at index " + i);
+                           }
+
+                           requireSlice("polygon ring", polygonRingStart[i], polygonRingCount[i], ringCount);
                         }
 
                         int[] ringCoordStart = new int[ringCount];
@@ -197,18 +219,29 @@ final class TerrainTilesResolutionIndex {
                         for (int i = 0; i < ringCount; i++) {
                            ringCoordStart[i] = input.readInt();
                            ringCoordCount[i] = input.readInt();
+                           requireSlice("ring coordinate", ringCoordStart[i], ringCoordCount[i], pointCount);
                         }
 
-                        float[] coords = new float[pointCount * 2];
+                        float[] coords = new float[Math.multiplyExact(pointCount, 2)];
 
                         for (int i = 0; i < coords.length; i++) {
                            coords[i] = input.readFloat();
+                           if (!Float.isFinite(coords[i])) {
+                              throw new IOException("Non-finite Terrain Tiles coordinate at index " + i);
+                           }
                         }
 
                         int[] polygonRefs = new int[refCount];
 
                         for (int i = 0; i < refCount; i++) {
                            polygonRefs[i] = input.readInt();
+                           if (polygonRefs[i] < 0 || polygonRefs[i] >= polygonCount) {
+                              throw new IOException("Invalid Terrain Tiles polygon reference at index " + i);
+                           }
+                        }
+
+                        if (input.read() != -1) {
+                           throw new IOException("Trailing data in Terrain Tiles resolution index");
                         }
 
                         Tellus.LOGGER.info("Loaded Terrain Tiles resolution index ({} polygons, {} points).", polygonCount, pointCount);
@@ -233,9 +266,21 @@ final class TerrainTilesResolutionIndex {
                }
             }
          }
-      } catch (IOException error) {
+      } catch (IOException | ArithmeticException error) {
          Tellus.LOGGER.warn("Failed to load Terrain Tiles resolution index.", error);
          return TerrainTilesResolutionIndex.Index.unavailable();
+      }
+   }
+
+   private static void requireCount(String label, int count, int maximum) throws IOException {
+      if (count < 0 || count > maximum) {
+         throw new IOException("Invalid Terrain Tiles " + label + " count " + count);
+      }
+   }
+
+   private static void requireSlice(String label, int start, int count, int total) throws IOException {
+      if (start < 0 || count < 0 || start > total - count) {
+         throw new IOException("Invalid Terrain Tiles " + label + " range " + start + "+" + count);
       }
    }
 

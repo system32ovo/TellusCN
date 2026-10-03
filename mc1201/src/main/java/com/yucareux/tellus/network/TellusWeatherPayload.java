@@ -15,6 +15,8 @@ public record TellusWeatherPayload(
    int centerX,
    int centerZ,
    int spacingBlocks,
+   long temperatureAgeMs,
+   float[] temperatureC,
    float[] snowIndex
 ) implements FabricPacket {
    
@@ -29,6 +31,8 @@ public record TellusWeatherPayload(
          buffer.readVarInt(),
          buffer.readVarInt(),
          buffer.readVarInt(),
+         buffer.readLong(),
+         readGrid(buffer, Float.NaN),
          readSnowIndex(buffer)
       );
    }
@@ -40,8 +44,11 @@ public record TellusWeatherPayload(
       int centerX,
       int centerZ,
       int spacingBlocks,
+      long temperatureAgeMs,
+      float[] temperatureC,
       float[] snowIndex
    ) {
+      temperatureC = copyGrid(temperatureC, Float.NaN);
       if (snowIndex != null && snowIndex.length == GRID_POINTS) {
          snowIndex = Arrays.copyOf(snowIndex, GRID_POINTS);
       } else {
@@ -54,6 +61,8 @@ public record TellusWeatherPayload(
       this.centerX = centerX;
       this.centerZ = centerZ;
       this.spacingBlocks = spacingBlocks;
+      this.temperatureAgeMs = temperatureAgeMs;
+      this.temperatureC = temperatureC;
       this.snowIndex = snowIndex;
    }
 
@@ -65,6 +74,8 @@ public record TellusWeatherPayload(
       buffer.writeVarInt(this.centerX());
       buffer.writeVarInt(this.centerZ());
       buffer.writeVarInt(this.spacingBlocks());
+      buffer.writeLong(this.temperatureAgeMs());
+      writeGrid(buffer, this.temperatureC(), Float.NaN);
       float[] snowIndex = this.snowIndex();
       if (snowIndex == null || snowIndex.length < GRID_POINTS) {
          snowIndex = new float[GRID_POINTS];
@@ -81,11 +92,32 @@ public record TellusWeatherPayload(
    }
 
    private static float[] readSnowIndex(FriendlyByteBuf buffer) {
-      float[] snowIndex = new float[GRID_POINTS];
+      return readGrid(buffer, 0.0F);
+   }
+
+   private static float[] readGrid(FriendlyByteBuf buffer, float fallback) {
+      float[] values = new float[GRID_POINTS];
+      Arrays.fill(values, fallback);
       for (int i = 0; i < GRID_POINTS; i++) {
-         snowIndex[i] = buffer.readFloat();
+         values[i] = buffer.readFloat();
       }
-      return snowIndex;
+      return values;
+   }
+
+   private static void writeGrid(FriendlyByteBuf buffer, float[] values, float fallback) {
+      float[] resolved = copyGrid(values, fallback);
+      for (int i = 0; i < GRID_POINTS; i++) {
+         buffer.writeFloat(resolved[i]);
+      }
+   }
+
+   private static float[] copyGrid(float[] values, float fallback) {
+      float[] copy = new float[GRID_POINTS];
+      Arrays.fill(copy, fallback);
+      if (values != null) {
+         System.arraycopy(values, 0, copy, 0, Math.min(values.length, GRID_POINTS));
+      }
+      return copy;
    }
 
    private static byte encodePrecipitation(TellusRealtimeState.PrecipitationMode mode) {

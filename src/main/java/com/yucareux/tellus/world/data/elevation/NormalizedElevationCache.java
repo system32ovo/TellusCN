@@ -24,7 +24,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
-import net.fabricmc.loader.api.FabricLoader;
+import com.yucareux.tellus.platform.TellusPlatform;
 import net.minecraft.util.Mth;
 
 final class NormalizedElevationCache implements TellusCacheHandle {
@@ -40,7 +40,7 @@ final class NormalizedElevationCache implements TellusCacheHandle {
 
    NormalizedElevationCache() {
       this(
-         FabricLoader.getInstance().getGameDir().resolve("tellus/cache/elevation-normalized"),
+         TellusPlatform.gameDir().resolve("tellus/cache/elevation-normalized"),
          Executors.newFixedThreadPool(DEFAULT_THREADS, new BuilderThreadFactory()),
          DEFAULT_MEMORY_TILES,
          true
@@ -52,7 +52,7 @@ final class NormalizedElevationCache implements TellusCacheHandle {
    }
 
    private NormalizedElevationCache(Path baseRoot, ExecutorService builderExecutor, int maxMemoryTiles, boolean registerHandle) {
-      this.root = Objects.requireNonNull(baseRoot, "baseRoot").resolve(EarthProjection.projectionModeId()).resolve("v1");
+      this.root = Objects.requireNonNull(baseRoot, "baseRoot").resolve(EarthProjection.projectionModeId()).resolve("v3");
       this.builderExecutor = Objects.requireNonNull(builderExecutor, "builderExecutor");
       this.memoryCache = CacheBuilder.newBuilder().maximumSize(Math.max(1, maxMemoryTiles)).build();
       if (registerHandle) {
@@ -80,16 +80,34 @@ final class NormalizedElevationCache implements TellusCacheHandle {
       double dz = sampleZ - z0;
       NormalizedElevationTile baseTile = this.getOrBuildBlocking(key, builder);
       double v00 = this.sampleHeight(key, baseTile, x0, z0, builder);
-      double v10 = this.sampleHeight(key, baseTile, x1, z0, builder);
-      double v01 = this.sampleHeight(key, baseTile, x0, z1, builder);
-      double v11 = this.sampleHeight(key, baseTile, x1, z1, builder);
-      double lerpX0 = Mth.lerp(dx, v00, v10);
-      double lerpX1 = Mth.lerp(dx, v01, v11);
-      double elevation = Mth.lerp(dz, lerpX0, lerpX1);
+      double elevation;
+      if (dx == 0.0 && dz == 0.0) {
+         elevation = v00;
+      } else if (dx == 0.0) {
+         double v01 = this.sampleHeight(key, baseTile, x0, z1, builder);
+         elevation = Mth.lerp(dz, v00, v01);
+      } else if (dz == 0.0) {
+         double v10 = this.sampleHeight(key, baseTile, x1, z0, builder);
+         elevation = Mth.lerp(dx, v00, v10);
+      } else {
+         double v10 = this.sampleHeight(key, baseTile, x1, z0, builder);
+         double v01 = this.sampleHeight(key, baseTile, x0, z1, builder);
+         double v11 = this.sampleHeight(key, baseTile, x1, z1, builder);
+         double lerpX0 = Mth.lerp(dx, v00, v10);
+         double lerpX1 = Mth.lerp(dx, v01, v11);
+         elevation = Mth.lerp(dz, lerpX0, lerpX1);
+      }
       int nearestSampleX = Mth.floor(sampleX + 0.5);
       int nearestSampleZ = Mth.floor(sampleZ + 0.5);
       TileSample provenanceSample = this.sampleProvenance(key, baseTile, nearestSampleX, nearestSampleZ, builder);
-      return new NormalizedElevationTileSample(elevation, provenanceSample.primaryProvider(), provenanceSample.providerMask(), spacing);
+      return new NormalizedElevationTileSample(
+         elevation,
+         provenanceSample.primaryProvider(),
+         provenanceSample.providerMask(),
+         spacing,
+         provenanceSample.mapterhornAvailable(),
+         provenanceSample.mapterhornElevationMeters()
+      );
    }
 
    void prefetchRange(
@@ -160,17 +178,33 @@ final class NormalizedElevationCache implements TellusCacheHandle {
       NormalizedElevationTile cached = this.memoryCache.getIfPresent(key);
       if (cached != null) {
          return CompletableFuture.completedFuture(cached);
-      } else {
-         return this.inFlight.computeIfAbsent(
-            key,
-            missing -> CompletableFuture.supplyAsync(() -> this.loadOrBuild(missing, builder), this.builderExecutor).whenComplete((tile, error) -> {
-                  this.inFlight.remove(missing);
-                  if (error == null && tile != null) {
-                     this.memoryCache.put(missing, tile);
-                  }
-               })
-         );
       }
+
+      CompletableFuture<NormalizedElevationTile> scheduled = new CompletableFuture<>();
+      CompletableFuture<NormalizedElevationTile> existing = this.inFlight.putIfAbsent(key, scheduled);
+      if (existing != null) {
+         return existing;
+      }
+
+      try {
+         this.builderExecutor.execute(() -> {
+            try {
+               NormalizedElevationTile tile = this.loadOrBuild(key, builder);
+               if (scheduled.complete(tile)) {
+                  this.memoryCache.put(key, tile);
+               }
+            } catch (Throwable error) {
+               scheduled.completeExceptionally(error);
+            } finally {
+               this.inFlight.remove(key, scheduled);
+            }
+         });
+      } catch (RuntimeException | Error error) {
+         this.inFlight.remove(key, scheduled);
+         scheduled.completeExceptionally(error);
+      }
+
+      return scheduled;
    }
 
    private NormalizedElevationTile loadOrBuild(NormalizedElevationTileKey key, NormalizedElevationCache.TileBuilder builder) {
@@ -190,16 +224,22 @@ final class NormalizedElevationCache implements TellusCacheHandle {
 
    private NormalizedElevationTile readTile(NormalizedElevationTileKey key) {
       Path heightPath = this.heightPath(key);
+      Path mapterhornPath = this.mapterhornPath(key);
       Path provenancePath = this.provenancePath(key);
-      if (!Files.exists(heightPath) || !Files.exists(provenancePath)) {
+      if (!Files.exists(heightPath) || !Files.exists(mapterhornPath) || !Files.exists(provenancePath)) {
          return null;
       } else {
-         try (InputStream heightIn = Files.newInputStream(heightPath); InputStream provenanceIn = Files.newInputStream(provenancePath)) {
+         try (
+            InputStream heightIn = Files.newInputStream(heightPath);
+            InputStream mapterhornIn = Files.newInputStream(mapterhornPath);
+            InputStream provenanceIn = Files.newInputStream(provenancePath)
+         ) {
             ShortRaster heights = TellusRasterReader.readShortRaster(heightIn);
+            ShortRaster mapterhornHeights = TellusRasterReader.readShortRaster(mapterhornIn);
             TellusElevationProvenance provenance = TellusElevationProvenanceCodec.read(provenanceIn);
-            return new NormalizedElevationTile(key, heights, provenance);
+            return new NormalizedElevationTile(key, heights, mapterhornHeights, provenance);
          } catch (IOException | RuntimeException error) {
-            this.deleteCorruptTile(heightPath, provenancePath, key, error);
+            this.deleteCorruptTile(heightPath, mapterhornPath, provenancePath, key, error);
             return null;
          }
       }
@@ -207,15 +247,20 @@ final class NormalizedElevationCache implements TellusCacheHandle {
 
    private void writeTile(NormalizedElevationTileKey key, NormalizedElevationTile tile) throws IOException {
       Path heightPath = this.heightPath(key);
+      Path mapterhornPath = this.mapterhornPath(key);
       Path provenancePath = this.provenancePath(key);
       Files.createDirectories(heightPath.getParent());
-      Files.createDirectories(provenancePath.getParent());
-      Path tempHeight = heightPath.resolveSibling(heightPath.getFileName() + ".tmp");
-      Path tempProvenance = provenancePath.resolveSibling(provenancePath.getFileName() + ".tmp");
+      Path tempHeight = Files.createTempFile(heightPath.getParent(), heightPath.getFileName().toString() + "-", ".tmp");
+      Path tempMapterhorn = Files.createTempFile(mapterhornPath.getParent(), mapterhornPath.getFileName().toString() + "-", ".tmp");
+      Path tempProvenance = Files.createTempFile(provenancePath.getParent(), provenancePath.getFileName().toString() + "-", ".tmp");
 
       try {
          try (OutputStream heightOut = Files.newOutputStream(tempHeight)) {
             TellusRasterWriter.writeShortRaster(heightOut, tile.heights());
+         }
+
+         try (OutputStream mapterhornOut = Files.newOutputStream(tempMapterhorn)) {
+            TellusRasterWriter.writeShortRaster(mapterhornOut, tile.mapterhornHeights());
          }
 
          try (OutputStream provenanceOut = Files.newOutputStream(tempProvenance)) {
@@ -223,9 +268,11 @@ final class NormalizedElevationCache implements TellusCacheHandle {
          }
 
          moveAtomically(tempHeight, heightPath);
+         moveAtomically(tempMapterhorn, mapterhornPath);
          moveAtomically(tempProvenance, provenancePath);
       } catch (IOException error) {
          Files.deleteIfExists(tempHeight);
+         Files.deleteIfExists(tempMapterhorn);
          Files.deleteIfExists(tempProvenance);
          throw error;
       }
@@ -265,7 +312,9 @@ final class NormalizedElevationCache implements TellusCacheHandle {
       TellusElevationProvenance provenance = tile.provenance();
       DemUsage primaryProvider = provenance.primaryProvider(localX, localZ);
       int providerMask = provenance.isBlended(localX, localZ) ? provenance.providerMask() : primaryProvider.bit();
-      return new TileSample(primaryProvider, providerMask);
+      boolean mapterhornAvailable = provenance.mapterhornAvailable(localX, localZ);
+      double mapterhornElevation = mapterhornAvailable ? tile.mapterhornHeights().get(localX, localZ) : Double.NaN;
+      return new TileSample(primaryProvider, providerMask, mapterhornAvailable, mapterhornElevation);
    }
 
    private TileSample sampleProvenance(
@@ -281,7 +330,9 @@ final class NormalizedElevationCache implements TellusCacheHandle {
          TellusElevationProvenance provenance = baseTile.provenance();
          DemUsage primaryProvider = provenance.primaryProvider(localX, localZ);
          int providerMask = provenance.isBlended(localX, localZ) ? provenance.providerMask() : primaryProvider.bit();
-         return new TileSample(primaryProvider, providerMask);
+         boolean mapterhornAvailable = provenance.mapterhornAvailable(localX, localZ);
+         double mapterhornElevation = mapterhornAvailable ? baseTile.mapterhornHeights().get(localX, localZ) : Double.NaN;
+         return new TileSample(primaryProvider, providerMask, mapterhornAvailable, mapterhornElevation);
       }
 
       return this.sampleProvenance(baseKey, globalSampleX, globalSampleZ, builder);
@@ -289,6 +340,10 @@ final class NormalizedElevationCache implements TellusCacheHandle {
 
    private Path heightPath(NormalizedElevationTileKey key) {
       return this.resolveTileDirectory(key).resolve(Integer.toString(key.tileZ()) + ".raster");
+   }
+
+   private Path mapterhornPath(NormalizedElevationTileKey key) {
+      return this.resolveTileDirectory(key).resolve(Integer.toString(key.tileZ()) + ".mapterhorn.raster");
    }
 
    private Path provenancePath(NormalizedElevationTileKey key) {
@@ -300,9 +355,16 @@ final class NormalizedElevationCache implements TellusCacheHandle {
       return this.root.resolve(key.demSelectionFingerprint()).resolve(oceanMode).resolve("lod" + key.lod()).resolve(Integer.toString(key.tileX()));
    }
 
-   private void deleteCorruptTile(Path heightPath, Path provenancePath, NormalizedElevationTileKey key, Throwable error) {
+   private void deleteCorruptTile(
+      Path heightPath, Path mapterhornPath, Path provenancePath, NormalizedElevationTileKey key, Throwable error
+   ) {
       try {
          Files.deleteIfExists(heightPath);
+      } catch (IOException ignored) {
+      }
+
+      try {
+         Files.deleteIfExists(mapterhornPath);
       } catch (IOException ignored) {
       }
 
@@ -349,7 +411,12 @@ final class NormalizedElevationCache implements TellusCacheHandle {
       NormalizedElevationTile build(NormalizedElevationTileKey key) throws IOException;
    }
 
-   private static record TileSample(DemUsage primaryProvider, int providerMask) {
+   private static record TileSample(
+      DemUsage primaryProvider,
+      int providerMask,
+      boolean mapterhornAvailable,
+      double mapterhornElevationMeters
+   ) {
    }
 
    private static final class BuilderThreadFactory implements ThreadFactory {

@@ -19,7 +19,8 @@ public class OceanMonumentBuildingMixin {
       method = "postProcess",
       at = @At(
          value = "INVOKE",
-         target = "Ljava/lang/Math;max(II)I"
+         target = "Ljava/lang/Math;max(II)I",
+         remap = false
       )
    )
    private int tellus$useTellusSeaLevel(

@@ -1,82 +1,139 @@
 package com.yucareux.tellus.world.data.cover;
 
+import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.cache.TellusCacheDomain;
+import com.yucareux.tellus.cache.TellusCacheFiles;
 import com.yucareux.tellus.cache.TellusCacheHandle;
 import com.yucareux.tellus.cache.TellusCacheRegistry;
-import com.yucareux.tellus.Tellus;
 import com.yucareux.tellus.config.TellusEndpointConfig;
-import com.yucareux.tellus.world.data.source.DownloadProgressReporter;
+import com.yucareux.tellus.integration.distant_horizons.managed.ManagedTerrainNetworkPolicy;
+import com.yucareux.tellus.platform.TellusPlatform;
+import com.yucareux.tellus.world.data.osm.OvertureTileUrls;
+import com.yucareux.tellus.world.data.osm.PmTilesRangeReader;
+import com.yucareux.tellus.world.data.pmtiles.PmTilesSafety;
+import com.yucareux.tellus.world.data.source.ParallelDownloadRunner;
 import com.yucareux.tellus.worldgen.EarthProjection;
+import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile;
+import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Feature;
+import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.GeomType;
+import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Layer;
+import io.github.sebasbaumh.mapbox.vectortile.VectorTile.Tile.Value;
 import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
+import java.io.OutputStream;
+import java.net.SocketTimeoutException;
 import java.nio.channels.ClosedByInterruptException;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.zip.InflaterInputStream;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.util.Mth;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.IntBinaryOperator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
+/**
+ * Samples the official ESA WorldCover 2021 COG pyramid and falls back to
+ * Overture Maps land-cover vectors when the primary source is unavailable or
+ * outside its latitude coverage.
+ *
+ * <p>The rest of world generation consumes stable WorldCover numeric class
+ * values. Native COG pixels preserve the original 10 m classification while
+ * built-in overview levels reduce I/O for larger world scales and LODs.</p>
+ */
 public final class TellusLandCoverSource implements TellusCacheHandle {
-   private static final double MIN_LAT = -60.0;
-   private static final double MAX_LAT = 84.0;
+   public static final int NO_DATA_CLASS = 0;
+   public static final int WORLD_COVER_MIN_LATITUDE = WorldCoverCogSource.MIN_TILE_LAT;
+   static final int TREE_COVER_CLASS = 10;
+   static final int SHRUBLAND_CLASS = 20;
+   static final int GRASSLAND_CLASS = 30;
+   static final int CROPLAND_CLASS = 40;
+   static final int BUILT_UP_CLASS = 50;
+   static final int BARE_CLASS = 60;
+   static final int SNOW_ICE_CLASS = 70;
+   static final int WATER_CLASS = 80;
+   static final int WETLAND_CLASS = 90;
+   static final int MANGROVES_CLASS = 95;
+   static final int MOSS_LICHEN_CLASS = 100;
+
+   private static final String PM_TILES_THEME = "base";
+   private static final String LAND_COVER_LAYER_NAME = "land_cover";
+   private static final int PMTILES_TILETYPE_MVT = 1;
+   private static final int DEFAULT_TILE_EXTENT = 4096;
+   private static final int DEFAULT_MIN_LAND_COVER_ZOOM = 8;
+   private static final int DEFAULT_MAX_LAND_COVER_ZOOM = 13;
+   private static final double MIN_LAT = -85.05112878;
+   private static final double MAX_LAT = 85.05112878;
    private static final double MIN_LON = -180.0;
    private static final double MAX_LON = 180.0;
-   private static final int TILE_DEGREES = 3;
-   private static final int SNOW_ICE_CLASS = 70;
-   private static final int WATER_CLASS = 80;
-   private static final int MANGROVES_CLASS = 95;
-   private static final int BUILT_UP_CLASS = 50;
-   private static final int NO_DATA_CLASS = 0;
-   private static final int MAX_CACHE_TILES = intProperty("tellus.landcover.cacheTiles", 64);
-   private static final double RESOLUTION_METERS = 10.0;
-   private static final int TILE_CACHE_ENTRIES = intProperty("tellus.landcover.tileCacheEntries", 32);
-   private static final int SMOOTH_RADIUS_PIXELS = 1;
-   private static final ThreadLocal<TellusLandCoverSource.CoverSmoothScratch> COVER_SMOOTH_SCRATCH = ThreadLocal.withInitial(
-      TellusLandCoverSource.CoverSmoothScratch::new
-   );
-   private static final ThreadLocal<TellusLandCoverSource.CoverBlendScratch> COVER_BLEND_SCRATCH = ThreadLocal.withInitial(
-      TellusLandCoverSource.CoverBlendScratch::new
-   );
-   private static final String DEFAULT_ENDPOINT = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map";
-   // 延迟初始化，确保配置已加载
-   private static String getEndpoint() {
-      return TellusEndpointConfig.getLandCoverEndpoint(DEFAULT_ENDPOINT);
-   }
-   private static final String TILE_PATTERN = "ESA_WorldCover_10m_2021_v200_%s_Map.tif";
-   private final Path cacheRoot = FabricLoader.getInstance().getGameDir().resolve("tellus/cache/worldcover2021");
-   private final LoadingCache<TellusLandCoverSource.TileKey, TellusLandCoverSource.GeoTiffTile> cache = CacheBuilder.newBuilder()
-      .maximumSize(MAX_CACHE_TILES)
-      .removalListener(notification -> {
-         TellusLandCoverSource.GeoTiffTile tile = (TellusLandCoverSource.GeoTiffTile)notification.getValue();
-         if (tile != null) {
-            tile.close();
-         }
-      })
-      .build(new CacheLoader<TellusLandCoverSource.TileKey, TellusLandCoverSource.GeoTiffTile>() {
-         public TellusLandCoverSource.GeoTiffTile load(TellusLandCoverSource.TileKey key) throws Exception {
-            return TellusLandCoverSource.this.loadTile(key);
-         }
-      });
+   private static final double WEB_MERCATOR_CIRCUMFERENCE_METERS = 40075016.68557849;
+   private static final double SOURCE_RESOLUTION_METERS = 10.0;
+   private static final int RASTER_CACHE_MAGIC = 0x544C4332;
+   private static final int RASTER_CACHE_VERSION = 3;
+   private static final Pattern SORT_KEY_PATTERN = Pattern.compile("\\\"sort_key\\\"\\s*:\\s*(-?\\d+)");
+
+   private static final int RASTER_SIZE = intProperty("tellus.overture.landCover.rasterSize", 512, 64, 1024);
+   private static final int MAX_CACHE_TILES = intProperty("tellus.landcover.cacheTiles", 96, 1, 2048);
+   private static final int DIRECTORY_CACHE_ENTRIES = intProperty("tellus.overture.landCover.dirCache", 256, 1, 8192);
+   private static final int CONNECT_TIMEOUT_MS = intProperty("tellus.overture.landCover.connectTimeoutMs", 30000, 1, 120000);
+   private static final int READ_TIMEOUT_MS = intProperty("tellus.overture.landCover.readTimeoutMs", 60000, 1, 180000);
+   private static final int FETCH_RETRY_ATTEMPTS = intProperty("tellus.overture.landCover.fetchRetries", 3, 1, 8);
+   private static final int NEAREST_LAND_RADIUS_PIXELS = intProperty("tellus.landcover.nearestLandRadiusPixels", 64, 1, 512);
+   private static final int NEAREST_LAND_CACHE_ENTRIES = intProperty("tellus.landcover.nearestLandCacheEntries", 131072, 1024, 1048576);
+   private static final int NEAREST_LAND_NOT_FOUND = -1;
+   private final Path cacheRoot;
+   private final PmTilesRangeReader pmTilesReader;
+   private final WorldCoverCogSource worldCoverSource;
+   private final Object initLock = new Object();
+   private final LoadingCache<TileKey, RasterTile> cache;
+   private final Cache<NearestLandKey, Integer> nearestLandCache;
+   private volatile boolean initialized;
+   private volatile boolean available;
+   private volatile int minZoom = DEFAULT_MIN_LAND_COVER_ZOOM;
+   private volatile int maxZoom = DEFAULT_MAX_LAND_COVER_ZOOM;
+   private volatile int initializationFailures;
+   private volatile long nextInitializationAttemptNanos;
 
    public TellusLandCoverSource() {
+      // 官方覆盖层瓦片地址：主题名 base，发布版本交给上游 OvertureTileUrls 自动发现
+      String officialLandCoverUrl = OvertureTileUrls.defaultThemeUrl(PM_TILES_THEME);
+      // 该主题与沙地共用同一个 base.pmtiles 压缩包，因此沿用沙地的镜像路由：镜像地址优先、官方地址兜底
+      List<String> pmTilesUrls = TellusEndpointConfig.getOvertureBaseCandidates(officialLandCoverUrl);
+      // 缓存目录按主地址做命名空间隔离，避免镜像与官方源的同名瓦片互相当作缓存命中
+      this.cacheRoot = TellusPlatform.gameDir()
+         .resolve("tellus/cache/land-cover-overture")
+         .resolve(OvertureTileUrls.cacheNamespace(pmTilesUrls.get(0)));
+      // 用候选列表共享读取器：与沙地读到同一个压缩包时可共用文件头与目录缓存
+      this.pmTilesReader = PmTilesRangeReader.shared(pmTilesUrls, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, DIRECTORY_CACHE_ENTRIES);
+      // 上游 0.8.2 新增的 ESA WorldCover COG 兜底数据源，在 Overture 数据不可用时补齐覆盖层
+      this.worldCoverSource = new WorldCoverCogSource();
+      this.cache = CacheBuilder.newBuilder().maximumSize(MAX_CACHE_TILES).build(new CacheLoader<TileKey, RasterTile>() {
+         @Override
+         public RasterTile load(TileKey key) throws Exception {
+            return TellusLandCoverSource.this.loadTileBlocking(key);
+         }
+      });
+      this.nearestLandCache = CacheBuilder.newBuilder().maximumSize(NEAREST_LAND_CACHE_ENTRIES).build();
       TellusCacheRegistry.register(this);
    }
 
@@ -85,49 +142,40 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
    }
 
    public int sampleCoverClass(double blockX, double blockZ, double worldScale) {
-      return this.sampleCoverClass(blockX, blockZ, worldScale, worldScale);
+      return this.sampleCoverClass(blockX, blockZ, worldScale, worldScale, managedLookupMode());
    }
 
    public int sampleCoverClass(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      return this.sampleCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, false);
+      return this.sampleCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, managedLookupMode());
    }
 
    public int sampleCoverClassLocalOnly(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      return this.sampleCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, true);
+      return this.sampleCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, LookupMode.LOCAL_ONLY);
    }
 
    public int sampleCoverClassMemoryOnly(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      if (worldScale <= 0.0) {
-         return Integer.MIN_VALUE;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
-         }
-
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return this.sampleCoverClassAtLonLatMemoryOnly(lon, lat);
-      }
+      return this.sampleCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, LookupMode.MEMORY_ONLY);
    }
 
-   private int sampleCoverClass(double blockX, double blockZ, double worldScale, double previewResolutionMeters, boolean localOnly) {
-      if (worldScale <= 0.0) {
-         return 0;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
-         }
-
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return localOnly ? this.sampleCoverClassAtLonLatLocalOnly(lon, lat) : this.sampleCoverClassAtLonLat(lon, lat);
+   private int sampleCoverClass(
+      double blockX, double blockZ, double worldScale, double previewResolutionMeters, LookupMode lookupMode
+   ) {
+      if (!isWithinTileCoverage(blockX, blockZ, worldScale)) {
+         return NO_DATA_CLASS;
       }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      double resolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      WorldCoverCogSource.Sample worldCover = this.worldCoverSource.sample(
+         lon, lat, resolutionMeters, worldCoverLookupMode(lookupMode)
+      );
+      if (worldCover.available()) {
+         return worldCover.coverClass();
+      }
+      int zoom = this.queryZoom(resolutionMeters, lookupMode);
+      return this.sampleAtLonLat(lon, lat, zoom, lookupMode);
    }
 
    public int sampleSmoothedCoverClass(double blockX, double blockZ, double worldScale) {
@@ -135,357 +183,263 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
    }
 
    public int sampleSmoothedCoverClass(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      if (worldScale <= 0.0) {
-         return 0;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
-         }
-
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return this.sampleSmoothedCoverClassAtLonLat(lon, lat, SMOOTH_RADIUS_PIXELS);
+      if (!isWithinTileCoverage(blockX, blockZ, worldScale)) {
+         return NO_DATA_CLASS;
       }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      LookupMode lookupMode = managedLookupMode();
+      double resolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      WorldCoverCogSource.Sample worldCover = this.worldCoverSource.sampleSmoothed(
+         lon, lat, resolutionMeters, worldCoverLookupMode(lookupMode)
+      );
+      if (worldCover.available()) {
+         return worldCover.coverClass();
+      }
+      int zoom = this.queryZoom(resolutionMeters, lookupMode);
+      TilePosition center = tilePosition(lon, lat, zoom);
+      if (center == null) {
+         return NO_DATA_CLASS;
+      }
+
+      int[] counts = new int[256];
+      int bestClass = this.sampleGrid(zoom, center.globalPixelX(), center.globalPixelY(), lookupMode);
+      int bestCount = 0;
+      for (int dz = -1; dz <= 1; dz++) {
+         for (int dx = -1; dx <= 1; dx++) {
+            int coverClass = this.sampleGrid(zoom, center.globalPixelX() + dx, center.globalPixelY() + dz, lookupMode);
+            if (coverClass >= 0 && coverClass < counts.length) {
+               int count = ++counts[coverClass];
+               if (count > bestCount) {
+                  bestCount = count;
+                  bestClass = coverClass;
+               }
+            }
+         }
+      }
+
+      return bestClass == Integer.MIN_VALUE ? NO_DATA_CLASS : bestClass;
    }
 
    public int sampleVisualCoverClass(double blockX, double blockZ, double worldScale) {
-      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, worldScale);
+      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, worldScale, managedLookupMode());
    }
 
    public int sampleVisualCoverClass(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, false);
+      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, managedLookupMode());
    }
 
    public int sampleVisualCoverClassLocalOnly(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, true);
+      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, LookupMode.LOCAL_ONLY);
    }
 
    public int sampleVisualCoverClassMemoryOnly(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      if (worldScale <= 0.0) {
-         return Integer.MIN_VALUE;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
+      return this.sampleVisualCoverClass(blockX, blockZ, worldScale, previewResolutionMeters, LookupMode.MEMORY_ONLY);
+   }
+
+   private int sampleVisualCoverClass(
+      double blockX,
+      double blockZ,
+      double worldScale,
+      double previewResolutionMeters,
+      LookupMode lookupMode
+   ) {
+      if (!isWithinTileCoverage(blockX, blockZ, worldScale)) {
+         return NO_DATA_CLASS;
+      }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      double resolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      WorldCoverCogSource.Sample worldCover = this.worldCoverSource.sampleVisual(
+         lon,
+         lat,
+         resolutionMeters,
+         blockX,
+         blockZ,
+         worldScale,
+         worldCoverLookupMode(lookupMode)
+      );
+      if (worldCover.available()) {
+         return worldCover.coverClass();
+      }
+
+      int zoom = this.queryZoom(resolutionMeters, lookupMode);
+      return this.sampleVisualAtLonLat(lon, lat, zoom, resolutionMeters, blockX, blockZ, worldScale, lookupMode);
+   }
+
+   public int sampleNearestLandCoverClass(double blockX, double blockZ, double worldScale, int fallbackCoverClass) {
+      return this.sampleNearestLandCoverClass(blockX, blockZ, worldScale, fallbackCoverClass, managedLookupMode());
+   }
+
+   private static LookupMode managedLookupMode() {
+      return ManagedTerrainNetworkPolicy.isCacheOnly() ? LookupMode.LOCAL_ONLY : LookupMode.BLOCKING;
+   }
+
+   private static WorldCoverCogSource.LookupMode worldCoverLookupMode(LookupMode lookupMode) {
+      return switch (lookupMode) {
+         case BLOCKING -> WorldCoverCogSource.LookupMode.BLOCKING;
+         case LOCAL_ONLY -> WorldCoverCogSource.LookupMode.LOCAL_ONLY;
+         case MEMORY_ONLY -> WorldCoverCogSource.LookupMode.MEMORY_ONLY;
+      };
+   }
+
+   public int sampleNearestLandCoverClassLocalOnly(double blockX, double blockZ, double worldScale, int fallbackCoverClass) {
+      return this.sampleNearestLandCoverClass(blockX, blockZ, worldScale, fallbackCoverClass, LookupMode.LOCAL_ONLY);
+   }
+
+   public int sampleNearestLandCoverClassMemoryOnly(double blockX, double blockZ, double worldScale, int fallbackCoverClass) {
+      return this.sampleNearestLandCoverClass(blockX, blockZ, worldScale, fallbackCoverClass, LookupMode.MEMORY_ONLY);
+   }
+
+   private int sampleNearestLandCoverClass(
+      double blockX, double blockZ, double worldScale, int fallbackCoverClass, LookupMode lookupMode
+   ) {
+      if (!isWithinTileCoverage(blockX, blockZ, worldScale)) {
+         return fallbackCoverClass;
+      }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      WorldCoverCogSource.Sample worldCover = this.worldCoverSource.sampleNearestLand(
+         lon,
+         lat,
+         Math.max(SOURCE_RESOLUTION_METERS, worldScale),
+         NEAREST_LAND_RADIUS_PIXELS,
+         fallbackCoverClass,
+         TellusLandCoverSource::isLandCoverClass,
+         worldCoverLookupMode(lookupMode)
+      );
+      if (worldCover.available()) {
+         return worldCover.coverClass();
+      }
+      int zoom = this.queryZoom(Math.max(SOURCE_RESOLUTION_METERS, worldScale), lookupMode);
+      TilePosition center = tilePosition(lon, lat, zoom);
+      if (center == null) {
+         return fallbackCoverClass;
+      }
+
+      RasterTile centerTile = this.getTile(center.key(), lookupMode);
+      if (centerTile == null) {
+         return lookupMode == LookupMode.MEMORY_ONLY ? Integer.MIN_VALUE : fallbackCoverClass;
+      }
+
+      NearestLandKey cacheKey = new NearestLandKey(zoom, center.globalPixelX(), center.globalPixelY());
+      Integer cached = this.nearestLandCache.getIfPresent(cacheKey);
+      if (cached != null) {
+         return cached == NEAREST_LAND_NOT_FOUND ? fallbackCoverClass : cached;
+      }
+
+      Map<TileKey, RasterTile> searchTiles = new HashMap<>();
+      searchTiles.put(center.key(), centerTile);
+      Set<TileKey> unavailableTiles = new HashSet<>();
+      NearestLandSearch nearest = findNearestLandCoverClassWithCoverage(
+         center.globalPixelX(),
+         center.globalPixelY(),
+         NEAREST_LAND_RADIUS_PIXELS,
+         (pixelX, pixelY) -> this.sampleGrid(
+            zoom, pixelX, pixelY, lookupMode, searchTiles, unavailableTiles
+         ),
+         (pixelX, pixelY) -> isGlobalPixelInBounds(zoom, pixelX, pixelY)
+      );
+      if (nearest.coverClass() != Integer.MIN_VALUE) {
+         if (nearest.complete()) {
+            this.nearestLandCache.put(cacheKey, nearest.coverClass());
          }
-
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return this.sampleVisualCoverClassAtLonLatMemoryOnly(
-            lon, lat, blockX, blockZ, effectiveSampleResolutionMeters(worldScale, previewResolutionMeters)
-         );
+         return nearest.coverClass();
       }
+
+      if (nearest.complete()) {
+         this.nearestLandCache.put(cacheKey, NEAREST_LAND_NOT_FOUND);
+      }
+      return lookupMode == LookupMode.MEMORY_ONLY ? Integer.MIN_VALUE : fallbackCoverClass;
    }
 
-   private int sampleVisualCoverClass(double blockX, double blockZ, double worldScale, double previewResolutionMeters, boolean localOnly) {
-      if (worldScale <= 0.0) {
-         return 0;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
-         }
+   static int findNearestLandCoverClass(int centerX, int centerY, int maxRadius, IntBinaryOperator sampler) {
+      int bestClass = Integer.MIN_VALUE;
+      int bestDistanceSquared = Integer.MAX_VALUE;
+      int boundedRadius = Math.max(0, maxRadius);
 
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return localOnly
-            ? this.sampleVisualCoverClassAtLonLatLocalOnly(lon, lat, blockX, blockZ, effectiveSampleResolutionMeters(worldScale, previewResolutionMeters))
-            : this.sampleVisualCoverClassAtLonLat(lon, lat, blockX, blockZ, effectiveSampleResolutionMeters(worldScale, previewResolutionMeters));
-      }
-   }
+      for (int radius = 1; radius <= boundedRadius; radius++) {
+         int minX = centerX - radius;
+         int maxX = centerX + radius;
+         int minY = centerY - radius;
+         int maxY = centerY + radius;
 
-   private int sampleCoverClassAtLonLat(double lon, double lat) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return NO_DATA_CLASS;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTile(key);
-         return tile.sample(lon, lat);
-      }
-   }
+         for (int x = minX; x <= maxX; x++) {
+            int topClass = sampler.applyAsInt(x, minY);
+            int topDistanceSquared = squaredDistance(centerX, centerY, x, minY);
+            if (isLandCoverClass(topClass) && topDistanceSquared < bestDistanceSquared) {
+               bestClass = topClass;
+               bestDistanceSquared = topDistanceSquared;
+            }
 
-   private int sampleCoverClassAtLonLatLocalOnly(double lon, double lat) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return NO_DATA_CLASS;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTileLocalOnly(key);
-         return tile.sample(lon, lat);
-      }
-   }
-
-   private int sampleCoverClassAtLonLatMemoryOnly(double lon, double lat) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return Integer.MIN_VALUE;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTileMemoryOnly(key);
-         return tile == null ? Integer.MIN_VALUE : tile.sample(lon, lat);
-      }
-   }
-
-   private int sampleSmoothedCoverClassAtLonLat(double lon, double lat, int radiusPixels) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return NO_DATA_CLASS;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTile(key);
-         TellusLandCoverSource.Pixel center = tile.toPixel(lon, lat);
-         if (center == null) {
-            return NO_DATA_CLASS;
-         } else {
-            int centerValue = tile.sampleValue(center.x(), center.y());
-            if (radiusPixels > 0 && centerValue != WATER_CLASS && centerValue != NO_DATA_CLASS) {
-               TellusLandCoverSource.CoverSmoothScratch scratch = COVER_SMOOTH_SCRATCH.get();
-               scratch.reset();
-               if (tile.isNeighborhoodInBounds(center.x(), center.y(), radiusPixels)) {
-                  for (int dy = -radiusPixels; dy <= radiusPixels; dy++) {
-                     int py = center.y() + dy;
-
-                     for (int dx = -radiusPixels; dx <= radiusPixels; dx++) {
-                        int px = center.x() + dx;
-                        int value = tile.sampleValue(px, py);
-                        if (value != WATER_CLASS && value != NO_DATA_CLASS) {
-                           scratch.add(value);
-                        }
-                     }
-                  }
-               } else {
-                  for (int dy = -radiusPixels; dy <= radiusPixels; dy++) {
-                     int py = center.y() + dy;
-
-                     for (int dxx = -radiusPixels; dxx <= radiusPixels; dxx++) {
-                        int px = center.x() + dxx;
-                        int value = this.sampleValueAcrossTiles(tile, px, py);
-                        if (value != WATER_CLASS && value != NO_DATA_CLASS) {
-                           scratch.add(value);
-                        }
-                     }
-                  }
-               }
-
-               return scratch.pickMajority(centerValue);
-            } else {
-               return centerValue;
+            int bottomClass = sampler.applyAsInt(x, maxY);
+            int bottomDistanceSquared = squaredDistance(centerX, centerY, x, maxY);
+            if (isLandCoverClass(bottomClass) && bottomDistanceSquared < bestDistanceSquared) {
+               bestClass = bottomClass;
+               bestDistanceSquared = bottomDistanceSquared;
             }
          }
-      }
-   }
 
-   private int sampleVisualCoverClassAtLonLat(double lon, double lat, double blockX, double blockZ, double effectiveResolutionMeters) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return NO_DATA_CLASS;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTile(key);
-         TellusLandCoverSource.ContinuousPixel center = tile.toContinuousPixel(lon, lat);
-         if (center == null) {
-            return NO_DATA_CLASS;
-         } else {
-            int centerPixelX = Mth.floor(center.x());
-            int centerPixelY = Mth.floor(center.y());
-            int centerValue = tile.sampleValue(centerPixelX, centerPixelY);
-            if (effectiveResolutionMeters >= RESOLUTION_METERS || isHardRawCoverClass(centerValue)) {
-               return centerValue;
-            } else {
-               double transitionStrength = Mth.clamp((RESOLUTION_METERS - effectiveResolutionMeters) / 9.0, 0.0, 1.0);
-               if (!(transitionStrength > 0.0)) {
-                  return centerValue;
-               } else {
-                  double blendX = center.x() - 0.5;
-                  double blendY = center.y() - 0.5;
-                  int x0 = Mth.floor(blendX);
-                  int y0 = Mth.floor(blendY);
-                  int x1 = x0 + 1;
-                  int y1 = y0 + 1;
-                  double fx = blendX - x0;
-                  double fy = blendY - y0;
-                  int value00 = this.sampleValueAcrossTiles(tile, x0, y0);
-                  int value10 = this.sampleValueAcrossTiles(tile, x1, y0);
-                  int value01 = this.sampleValueAcrossTiles(tile, x0, y1);
-                  int value11 = this.sampleValueAcrossTiles(tile, x1, y1);
-                  if (isHardRawCoverClass(value00) || isHardRawCoverClass(value10) || isHardRawCoverClass(value01) || isHardRawCoverClass(value11)) {
-                     return centerValue;
-                  } else {
-                     TellusLandCoverSource.CoverBlendScratch scratch = COVER_BLEND_SCRATCH.get();
-                     scratch.reset();
-                     double inverseFx = 1.0 - fx;
-                     double inverseFy = 1.0 - fy;
-                     scratch.add(centerValue, 1.0 - transitionStrength);
-                     scratch.add(value00, inverseFx * inverseFy * transitionStrength);
-                     scratch.add(value10, fx * inverseFy * transitionStrength);
-                     scratch.add(value01, inverseFx * fy * transitionStrength);
-                     scratch.add(value11, fx * fy * transitionStrength);
-                     return scratch.pickWeighted(
-                        centerValue, hashToUnitDouble(Mth.floor(blockX), Mth.floor(blockZ), 9154887495218319081L)
-                     );
-                  }
-               }
+         for (int y = minY + 1; y < maxY; y++) {
+            int leftClass = sampler.applyAsInt(minX, y);
+            int leftDistanceSquared = squaredDistance(centerX, centerY, minX, y);
+            if (isLandCoverClass(leftClass) && leftDistanceSquared < bestDistanceSquared) {
+               bestClass = leftClass;
+               bestDistanceSquared = leftDistanceSquared;
+            }
+
+            int rightClass = sampler.applyAsInt(maxX, y);
+            int rightDistanceSquared = squaredDistance(centerX, centerY, maxX, y);
+            if (isLandCoverClass(rightClass) && rightDistanceSquared < bestDistanceSquared) {
+               bestClass = rightClass;
+               bestDistanceSquared = rightDistanceSquared;
             }
          }
-      }
-   }
 
-   private int sampleVisualCoverClassAtLonLatLocalOnly(double lon, double lat, double blockX, double blockZ, double effectiveResolutionMeters) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return NO_DATA_CLASS;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTileLocalOnly(key);
-         TellusLandCoverSource.ContinuousPixel center = tile.toContinuousPixel(lon, lat);
-         if (center == null) {
-            return NO_DATA_CLASS;
-         } else {
-            int centerPixelX = Mth.floor(center.x());
-            int centerPixelY = Mth.floor(center.y());
-            int centerValue = tile.sampleValue(centerPixelX, centerPixelY);
-            if (effectiveResolutionMeters >= RESOLUTION_METERS || isHardRawCoverClass(centerValue)) {
-               return centerValue;
-            } else {
-               double transitionStrength = Mth.clamp((RESOLUTION_METERS - effectiveResolutionMeters) / 9.0, 0.0, 1.0);
-               if (!(transitionStrength > 0.0)) {
-                  return centerValue;
-               } else {
-                  double blendX = center.x() - 0.5;
-                  double blendY = center.y() - 0.5;
-                  int x0 = Mth.floor(blendX);
-                  int y0 = Mth.floor(blendY);
-                  int x1 = x0 + 1;
-                  int y1 = y0 + 1;
-                  double fx = blendX - x0;
-                  double fy = blendY - y0;
-                  int value00 = this.sampleValueAcrossTilesLocalOnly(tile, x0, y0);
-                  int value10 = this.sampleValueAcrossTilesLocalOnly(tile, x1, y0);
-                  int value01 = this.sampleValueAcrossTilesLocalOnly(tile, x0, y1);
-                  int value11 = this.sampleValueAcrossTilesLocalOnly(tile, x1, y1);
-                  if (isHardRawCoverClass(value00) || isHardRawCoverClass(value10) || isHardRawCoverClass(value01) || isHardRawCoverClass(value11)) {
-                     return centerValue;
-                  } else {
-                     TellusLandCoverSource.CoverBlendScratch scratch = COVER_BLEND_SCRATCH.get();
-                     scratch.reset();
-                     double inverseFx = 1.0 - fx;
-                     double inverseFy = 1.0 - fy;
-                     scratch.add(centerValue, 1.0 - transitionStrength);
-                     scratch.add(value00, inverseFx * inverseFy * transitionStrength);
-                     scratch.add(value10, fx * inverseFy * transitionStrength);
-                     scratch.add(value01, inverseFx * fy * transitionStrength);
-                     scratch.add(value11, fx * fy * transitionStrength);
-                     return scratch.pickWeighted(
-                        centerValue, hashToUnitDouble(Mth.floor(blockX), Mth.floor(blockZ), 9154887495218319081L)
-                     );
-                  }
-               }
-            }
+         int nextRadius = radius + 1;
+         if (bestClass != Integer.MIN_VALUE && bestDistanceSquared < nextRadius * nextRadius) {
+            break;
          }
       }
+
+      return bestClass;
    }
 
-   private int sampleVisualCoverClassAtLonLatMemoryOnly(double lon, double lat, double blockX, double blockZ, double effectiveResolutionMeters) {
-      TellusLandCoverSource.TileKey key = tileKeyForLonLat(lon, lat);
-      if (key == null) {
-         return Integer.MIN_VALUE;
-      } else {
-         TellusLandCoverSource.GeoTiffTile tile = this.getTileMemoryOnly(key);
-         if (tile == null) {
-            return Integer.MIN_VALUE;
-         } else {
-            TellusLandCoverSource.ContinuousPixel center = tile.toContinuousPixel(lon, lat);
-            if (center == null) {
-               return Integer.MIN_VALUE;
-            } else {
-               int centerPixelX = Mth.floor(center.x());
-               int centerPixelY = Mth.floor(center.y());
-               int centerValue = tile.sampleValue(centerPixelX, centerPixelY);
-               if (effectiveResolutionMeters >= RESOLUTION_METERS || isHardRawCoverClass(centerValue)) {
-                  return centerValue;
-               } else {
-                  double transitionStrength = Mth.clamp((RESOLUTION_METERS - effectiveResolutionMeters) / 9.0, 0.0, 1.0);
-                  if (!(transitionStrength > 0.0)) {
-                     return centerValue;
-                  } else {
-                     double blendX = center.x() - 0.5;
-                     double blendY = center.y() - 0.5;
-                     int x0 = Mth.floor(blendX);
-                     int y0 = Mth.floor(blendY);
-                     int x1 = x0 + 1;
-                     int y1 = y0 + 1;
-                     double fx = blendX - x0;
-                     double fy = blendY - y0;
-                     int value00 = this.sampleValueAcrossTilesMemoryOnly(tile, x0, y0);
-                     int value10 = this.sampleValueAcrossTilesMemoryOnly(tile, x1, y0);
-                     int value01 = this.sampleValueAcrossTilesMemoryOnly(tile, x0, y1);
-                     int value11 = this.sampleValueAcrossTilesMemoryOnly(tile, x1, y1);
-                     if (value00 == Integer.MIN_VALUE || value10 == Integer.MIN_VALUE || value01 == Integer.MIN_VALUE || value11 == Integer.MIN_VALUE) {
-                        return Integer.MIN_VALUE;
-                     } else if (isHardRawCoverClass(value00)
-                        || isHardRawCoverClass(value10)
-                        || isHardRawCoverClass(value01)
-                        || isHardRawCoverClass(value11)) {
-                        return centerValue;
-                     } else {
-                        TellusLandCoverSource.CoverBlendScratch scratch = COVER_BLEND_SCRATCH.get();
-                        scratch.reset();
-                        double inverseFx = 1.0 - fx;
-                        double inverseFy = 1.0 - fy;
-                        scratch.add(centerValue, 1.0 - transitionStrength);
-                        scratch.add(value00, inverseFx * inverseFy * transitionStrength);
-                        scratch.add(value10, fx * inverseFy * transitionStrength);
-                        scratch.add(value01, inverseFx * fy * transitionStrength);
-                        scratch.add(value11, fx * fy * transitionStrength);
-                        return scratch.pickWeighted(centerValue, hashToUnitDouble(Mth.floor(blockX), Mth.floor(blockZ), 9154887495218319081L));
-                     }
-                  }
-               }
-            }
+   static NearestLandSearch findNearestLandCoverClassWithCoverage(
+      int centerX,
+      int centerY,
+      int maxRadius,
+      IntBinaryOperator sampler,
+      PixelCoverage expectedCoverage
+   ) {
+      boolean[] complete = new boolean[]{true};
+      int nearest = findNearestLandCoverClass(centerX, centerY, maxRadius, (pixelX, pixelY) -> {
+         int coverClass = sampler.applyAsInt(pixelX, pixelY);
+         if (coverClass == Integer.MIN_VALUE && expectedCoverage.contains(pixelX, pixelY)) {
+            complete[0] = false;
          }
-      }
+         return coverClass;
+      });
+      return new NearestLandSearch(nearest, complete[0]);
    }
 
-   private int sampleValueAcrossTiles(TellusLandCoverSource.GeoTiffTile tile, int pixelX, int pixelY) {
-      if (tile.isInside(pixelX, pixelY)) {
-         return tile.sampleValue(pixelX, pixelY);
-      } else {
-         double neighborLon = tile.lonForPixel(pixelX);
-         double neighborLat = tile.latForPixel(pixelY);
-         return this.sampleCoverClassAtLonLat(neighborLon, neighborLat);
-      }
+   private static boolean isLandCoverClass(int coverClass) {
+      return coverClass != Integer.MIN_VALUE
+         && coverClass != NO_DATA_CLASS
+         && coverClass != WATER_CLASS
+         && coverClass != MANGROVES_CLASS;
    }
 
-   private int sampleValueAcrossTilesLocalOnly(TellusLandCoverSource.GeoTiffTile tile, int pixelX, int pixelY) {
-      if (tile.isInside(pixelX, pixelY)) {
-         return tile.sampleValue(pixelX, pixelY);
-      } else {
-         double neighborLon = tile.lonForPixel(pixelX);
-         double neighborLat = tile.latForPixel(pixelY);
-         return this.sampleCoverClassAtLonLatLocalOnly(neighborLon, neighborLat);
-      }
-   }
-
-   private int sampleValueAcrossTilesMemoryOnly(TellusLandCoverSource.GeoTiffTile tile, int pixelX, int pixelY) {
-      if (tile.isInside(pixelX, pixelY)) {
-         return tile.sampleValue(pixelX, pixelY);
-      } else {
-         double neighborLon = tile.lonForPixel(pixelX);
-         double neighborLat = tile.latForPixel(pixelY);
-         return this.sampleCoverClassAtLonLatMemoryOnly(neighborLon, neighborLat);
-      }
-   }
-
-   private static boolean isHardRawCoverClass(int coverClass) {
-      return coverClass == NO_DATA_CLASS || coverClass == WATER_CLASS || coverClass == MANGROVES_CLASS || coverClass == BUILT_UP_CLASS;
-   }
-
-   private static double hashToUnitDouble(long x, long z, long salt) {
-      long seed = x * 3129871L ^ z * 116129781L ^ salt;
-      seed = seed * seed * 42317861L + seed * 11L;
-      return ((seed >>> 11) & (1L << 53) - 1L) * 1.1102230246251565E-16;
+   private static int squaredDistance(int centerX, int centerY, int x, int y) {
+      int dx = x - centerX;
+      int dy = y - centerY;
+      return dx * dx + dy * dy;
    }
 
    public void prefetchTiles(double blockX, double blockZ, double worldScale, int radius) {
@@ -493,308 +447,987 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
    }
 
    public void prefetchTiles(double blockX, double blockZ, double worldScale, int radius, double previewResolutionMeters) {
-      TellusLandCoverSource.TileKey center = tileKeyForBlock(blockX, blockZ, worldScale, previewResolutionMeters);
-      if (center != null) {
-         int clampedRadius = Math.max(0, radius);
+      if (!isWithinTileCoverage(blockX, blockZ, worldScale)) {
+         return;
+      }
 
-         for (int dz = -clampedRadius; dz <= clampedRadius; dz++) {
-            int lat = center.lat() + dz * TILE_DEGREES;
-            if (!(lat < MIN_LAT) && !(lat > MAX_LAT)) {
-               for (int dx = -clampedRadius; dx <= clampedRadius; dx++) {
-                  int lon = center.lon() + dx * TILE_DEGREES;
-                  if (!(lon < MIN_LON) && !(lon > MAX_LON)) {
-                     this.prefetchTile(new TellusLandCoverSource.TileKey(lat, lon));
-                  }
-               }
-            }
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double lat = EarthProjection.blockZToLat(blockZ, worldScale);
+      double resolutionMeters = effectiveSampleResolutionMeters(worldScale, previewResolutionMeters);
+      if (this.worldCoverSource.prefetch(lon, lat, resolutionMeters, radius)) {
+         return;
+      }
+
+      int zoom = this.queryZoom(resolutionMeters, LookupMode.BLOCKING);
+      TilePosition center = tilePosition(lon, lat, zoom);
+      if (center == null) {
+         return;
+      }
+
+      int clampedRadius = Math.max(0, radius);
+      int tilesPerAxis = 1 << zoom;
+      int minX = (int)Math.max(0L, (long)center.key().x() - clampedRadius);
+      int maxX = (int)Math.min(tilesPerAxis - 1L, (long)center.key().x() + clampedRadius);
+      int minY = (int)Math.max(0L, (long)center.key().y() - clampedRadius);
+      int maxY = (int)Math.min(tilesPerAxis - 1L, (long)center.key().y() + clampedRadius);
+      for (int tileY = minY; tileY <= maxY; tileY++) {
+         for (int tileX = minX; tileX <= maxX; tileX++) {
+            this.prefetchTile(new TileKey(zoom, tileX, tileY));
          }
       }
    }
 
-   private static int downsampleStep(double worldScale, double resolutionMeters, double previewResolutionMeters) {
-      if (!(worldScale > 0.0)) {
-         return 1;
-      } else if (!(effectiveSampleResolutionMeters(worldScale, previewResolutionMeters) >= resolutionMeters)) {
-         return 1;
-      } else {
-         return Math.max(1, Mth.floor(resolutionMeters / worldScale));
-      }
-   }
-
-   private static double downsampleBlock(double blockCoord, int step) {
-      if (step <= 1) {
-         return blockCoord;
-      } else {
-         int block = Mth.floor(blockCoord);
-         int snapped = Math.floorDiv(block, step) * step;
-         return snapped + step * 0.5;
-      }
-   }
-
-   private static TellusLandCoverSource.TileKey tileKeyForBlock(double blockX, double blockZ, double worldScale, double previewResolutionMeters) {
-      if (worldScale <= 0.0) {
-         return null;
-      } else {
-         int step = downsampleStep(worldScale, RESOLUTION_METERS, previewResolutionMeters);
-         if (step > 1) {
-            blockX = downsampleBlock(blockX, step);
-            blockZ = downsampleBlock(blockZ, step);
+   public int preloadAreaTaskCount(
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale, double previewResolutionMeters
+   ) {
+      List<WorldCoverCogSource.BlockKey> worldCoverBlocks = this.worldCoverSource.areaBlockKeys(
+         minBlockX,
+         minBlockZ,
+         maxBlockX,
+         maxBlockZ,
+         worldScale,
+         effectiveSampleResolutionMeters(worldScale, previewResolutionMeters)
+      );
+      if (!worldCoverBlocks.isEmpty()) {
+         int taskCount = worldCoverBlocks.size();
+         if (!this.worldCoverSource.fullyCoversArea(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale)) {
+            taskCount += this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale, previewResolutionMeters).size();
          }
-
-         double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
-         double lon = blockX / blocksPerDegree;
-         double lat = EarthProjection.blockZToLat(blockZ, worldScale);
-         return tileKeyForLonLat(lon, lat);
+         return taskCount;
       }
+      return Math.max(1, this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale, previewResolutionMeters).size());
    }
 
-   private static double effectiveSampleResolutionMeters(double worldScale, double previewResolutionMeters) {
-      return Double.isFinite(previewResolutionMeters) && previewResolutionMeters > 0.0 ? Math.max(worldScale, previewResolutionMeters) : worldScale;
+   public int preloadAreaInputs(
+      double minBlockX,
+      double minBlockZ,
+      double maxBlockX,
+      double maxBlockZ,
+      double worldScale,
+      double previewResolutionMeters,
+      int completedUnits,
+      BiConsumer<Integer, String> progressConsumer
+   ) {
+      return this.preloadAreaInputs(
+         minBlockX,
+         minBlockZ,
+         maxBlockX,
+         maxBlockZ,
+         worldScale,
+         previewResolutionMeters,
+         completedUnits,
+         progressConsumer,
+         false
+      );
    }
 
-   private static TellusLandCoverSource.TileKey tileKeyForLonLat(double lon, double lat) {
-      if (!(lat < MIN_LAT) && !(lat > MAX_LAT) && !(lon < MIN_LON) && !(lon > MAX_LON)) {
-         int tileLat = (int)Math.floor(lat / TILE_DEGREES) * TILE_DEGREES;
-         int tileLon = (int)Math.floor(lon / TILE_DEGREES) * TILE_DEGREES;
-         return new TellusLandCoverSource.TileKey(tileLat, tileLon);
-      } else {
-         return null;
-      }
+   public int preloadAreaInputsIntoMemory(
+      double minBlockX,
+      double minBlockZ,
+      double maxBlockX,
+      double maxBlockZ,
+      double worldScale,
+      double previewResolutionMeters,
+      int completedUnits,
+      BiConsumer<Integer, String> progressConsumer
+   ) {
+      return this.preloadAreaInputs(
+         minBlockX,
+         minBlockZ,
+         maxBlockX,
+         maxBlockZ,
+         worldScale,
+         previewResolutionMeters,
+         completedUnits,
+         progressConsumer,
+         true
+      );
    }
 
-   private void prefetchTile( TellusLandCoverSource.TileKey key) {
-      if (this.cache.getIfPresent(key) == null) {
-         try {
-            this.cache.get(key);
-         } catch (Exception var3) {
-            if (isInterruptedLoad(var3)) {
-               Thread.currentThread().interrupt();
-               return;
-            }
-
-            Tellus.LOGGER.debug("Failed to prefetch land cover tile {}", key, var3);
+   private int preloadAreaInputs(
+      double minBlockX,
+      double minBlockZ,
+      double maxBlockX,
+      double maxBlockZ,
+      double worldScale,
+      double previewResolutionMeters,
+      int completedUnits,
+      BiConsumer<Integer, String> progressConsumer,
+      boolean loadOvertureIntoMemory
+   ) {
+      BiConsumer<Integer, String> progress = progressConsumer == null ? (completed, detail) -> {
+      } : progressConsumer;
+      List<WorldCoverCogSource.BlockKey> worldCoverBlocks = this.worldCoverSource.areaBlockKeys(
+         minBlockX,
+         minBlockZ,
+         maxBlockX,
+         maxBlockZ,
+         worldScale,
+         effectiveSampleResolutionMeters(worldScale, previewResolutionMeters)
+      );
+      boolean worldCoverFullyCoversArea = this.worldCoverSource.fullyCoversArea(
+         minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale
+      );
+      if (!worldCoverBlocks.isEmpty()) {
+         int worldCoverStartingUnits = completedUnits;
+         progress.accept(completedUnits, "Downloading " + worldCoverBlocks.size() + " ESA WorldCover data blocks");
+         completedUnits = ParallelDownloadRunner.run(
+            ParallelDownloadRunner.scope("land-cover-worldcover-2021-v200", TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER)),
+            worldCoverBlocks,
+            completedUnits,
+            this.worldCoverSource::downloadBlock,
+            (key, completed, phaseTotal) -> progress.accept(
+               completed,
+               "Cached WorldCover block " + (completed - worldCoverStartingUnits) + "/" + phaseTotal + " (" + key.label() + ")"
+            )
+         );
+         if (worldCoverFullyCoversArea) {
+            return completedUnits;
          }
       }
+
+      List<TileKey> keys = this.areaTileKeys(minBlockX, minBlockZ, maxBlockX, maxBlockZ, worldScale, previewResolutionMeters);
+      if (keys.isEmpty()) {
+         progress.accept(completedUnits, "Skipping land cover; selected area is outside source coverage");
+         return completedUnits + 1;
+      }
+
+      int overtureStartingUnits = completedUnits;
+      progress.accept(
+         completedUnits,
+         (loadOvertureIntoMemory ? "Loading " : "Downloading ") + keys.size() + " Overture land-cover source tiles"
+      );
+      return ParallelDownloadRunner.run(
+         ParallelDownloadRunner.scope(
+            loadOvertureIntoMemory ? "land-cover-memory" : "land-cover",
+            TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER)
+         ),
+         keys,
+         completedUnits,
+         loadOvertureIntoMemory ? this::loadTileIntoCache : this::downloadRawTile,
+         (key, completed, phaseTotal) -> progress.accept(
+            completed,
+            (loadOvertureIntoMemory ? "Loaded " : "Cached ")
+               + "Overture land-cover tile "
+               + (completed - overtureStartingUnits)
+               + "/"
+               + phaseTotal
+               + " ("
+               + key.label()
+               + ")"
+         )
+      );
    }
 
-   private static int intProperty(String key, int defaultValue) {
-      String value = System.getProperty(key);
-      if (value == null) {
-         return defaultValue;
-      } else {
-         try {
-            return Math.max(1, Integer.parseInt(value));
-         } catch (NumberFormatException var4) {
-            return defaultValue;
+   private List<TileKey> areaTileKeys(
+      double minBlockX, double minBlockZ, double maxBlockX, double maxBlockZ, double worldScale, double previewResolutionMeters
+   ) {
+      if (!(Double.isFinite(worldScale) && worldScale > 0.0)
+         || !Double.isFinite(minBlockX)
+         || !Double.isFinite(minBlockZ)
+         || !Double.isFinite(maxBlockX)
+         || !Double.isFinite(maxBlockZ)) {
+         return List.of();
+      }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double coverageMinX = MIN_LON * blocksPerDegree;
+      double coverageMaxX = MAX_LON * blocksPerDegree;
+      double coverageZA = EarthProjection.latToBlockZ(MIN_LAT, worldScale);
+      double coverageZB = EarthProjection.latToBlockZ(MAX_LAT, worldScale);
+      double coverageMinZ = Math.min(coverageZA, coverageZB);
+      double coverageMaxZ = Math.max(coverageZA, coverageZB);
+      double requestedMinX = Math.min(minBlockX, maxBlockX);
+      double requestedMaxX = Math.max(minBlockX, maxBlockX);
+      double requestedMinZ = Math.min(minBlockZ, maxBlockZ);
+      double requestedMaxZ = Math.max(minBlockZ, maxBlockZ);
+      if (requestedMaxX < coverageMinX
+         || requestedMinX > coverageMaxX
+         || requestedMaxZ < coverageMinZ
+         || requestedMinZ > coverageMaxZ) {
+         return List.of();
+      }
+
+      int zoom = this.queryZoom(effectiveSampleResolutionMeters(worldScale, previewResolutionMeters), LookupMode.BLOCKING);
+      double lonA = Math.max(coverageMinX, requestedMinX) / blocksPerDegree;
+      double lonB = Math.min(coverageMaxX, requestedMaxX) / blocksPerDegree;
+      double latA = EarthProjection.blockZToLat(Math.max(coverageMinZ, requestedMinZ), worldScale);
+      double latB = EarthProjection.blockZToLat(Math.min(coverageMaxZ, requestedMaxZ), worldScale);
+      double minLon = Math.max(MIN_LON, Math.min(lonA, lonB));
+      double maxLon = Math.min(MAX_LON, Math.max(lonA, lonB));
+      double minLat = Math.max(MIN_LAT, Math.min(latA, latB));
+      double maxLat = Math.min(MAX_LAT, Math.max(latA, latB));
+      if (minLon > maxLon || minLat > maxLat) {
+         return List.of();
+      }
+
+      TilePosition northWest = tilePosition(minLon, maxLat, zoom);
+      TilePosition southEast = tilePosition(maxLon, minLat, zoom);
+      if (northWest == null || southEast == null) {
+         return List.of();
+      }
+
+      Set<TileKey> keys = new LinkedHashSet<>();
+      for (int tileY = northWest.key().y(); tileY <= southEast.key().y(); tileY++) {
+         for (int tileX = northWest.key().x(); tileX <= southEast.key().x(); tileX++) {
+            keys.add(new TileKey(zoom, tileX, tileY));
          }
       }
+      return new ArrayList<>(keys);
    }
 
-   private TellusLandCoverSource.GeoTiffTile getTile(TellusLandCoverSource.TileKey key) {
+   private void downloadRawTile(TileKey key) {
+      Path rawPath = this.rawCachePath(key);
+      if (Files.isRegularFile(rawPath)) {
+         return;
+      }
+
+      this.ensureInitialized();
+      if (!this.available) {
+         throw new IllegalStateException("Overture base PMTiles is unavailable");
+      }
+
+      long generation = TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER);
       try {
-         return (TellusLandCoverSource.GeoTiffTile)this.cache.get(key);
-      } catch (Exception var3) {
-         if (isInterruptedLoad(var3)) {
-            Thread.currentThread().interrupt();
-            return TellusLandCoverSource.GeoTiffTile.MISSING;
+         byte[] payload = this.fetchTilePayloadWithRetry(key);
+         if (!this.cacheRawTile(rawPath, payload, generation)) {
+            throw new IOException("Discarded stale Overture land-cover cache write for " + key);
          }
-
-         Tellus.LOGGER.warn("Failed to load land cover tile {}", key, var3);
-         return TellusLandCoverSource.GeoTiffTile.MISSING;
+      } catch (IOException error) {
+         throw new RuntimeException("Failed to download Overture land-cover tile " + key, error);
       }
    }
 
-   private TellusLandCoverSource.GeoTiffTile getTileLocalOnly(TellusLandCoverSource.TileKey key) {
-      TellusLandCoverSource.GeoTiffTile cached = (TellusLandCoverSource.GeoTiffTile)this.cache.getIfPresent(key);
+   private void loadTileIntoCache(TileKey key) {
+      long generation = TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER);
+      try {
+         this.cache.get(key);
+      } catch (Exception error) {
+         if (isInterruptedLoad(error)) {
+            Thread.currentThread().interrupt();
+         }
+         throw new RuntimeException("Failed to preload Overture land-cover tile " + key, error);
+      }
+      if (Thread.currentThread().isInterrupted()) {
+         throw new java.util.concurrent.CancellationException("Interrupted while preloading Overture land-cover tile " + key);
+      }
+      if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.LAND_COVER, generation)) {
+         this.cache.invalidate(key);
+         throw new IllegalStateException("Discarded stale Overture land-cover preload for " + key);
+      }
+   }
+
+   private int sampleAtLonLat(double lon, double lat, int zoom, LookupMode lookupMode) {
+      TilePosition position = tilePosition(lon, lat, zoom);
+      if (position == null) {
+         return NO_DATA_CLASS;
+      }
+
+      RasterTile tile = this.getTile(position.key(), lookupMode);
+      if (tile == null) {
+         return lookupMode == LookupMode.MEMORY_ONLY ? Integer.MIN_VALUE : NO_DATA_CLASS;
+      }
+      return tile.sample(position.pixelX(), position.pixelY());
+   }
+
+   private int sampleVisualAtLonLat(
+      double lon,
+      double lat,
+      int zoom,
+      double effectiveResolutionMeters,
+      double blockX,
+      double blockZ,
+      double worldScale,
+      LookupMode lookupMode
+   ) {
+      TilePosition center = tilePosition(lon, lat, zoom);
+      if (center == null) {
+         return NO_DATA_CLASS;
+      }
+
+      int centerClass = this.sampleGrid(zoom, center.globalPixelX(), center.globalPixelY(), lookupMode);
+      if (centerClass == Integer.MIN_VALUE) {
+         return lookupMode == LookupMode.MEMORY_ONLY ? Integer.MIN_VALUE : NO_DATA_CLASS;
+      }
+
+      double sourceResolutionMeters = WEB_MERCATOR_CIRCUMFERENCE_METERS / ((1L << zoom) * (double)RASTER_SIZE);
+      double transitionStrength = LandCoverTransition.strength(sourceResolutionMeters, effectiveResolutionMeters);
+      if (!(transitionStrength > 0.0) || LandCoverTransition.isHardClass(centerClass)) {
+         return centerClass;
+      }
+
+      double blendX = center.globalPixelCoordinateX() - 0.5;
+      double blendY = center.globalPixelCoordinateY() - 0.5;
+      int x0 = (int)Math.floor(blendX);
+      int y0 = (int)Math.floor(blendY);
+      int x1 = x0 + 1;
+      int y1 = y0 + 1;
+      int value00 = visualSampleOrCenter(zoom, x0, y0, lookupMode, centerClass);
+      int value10 = visualSampleOrCenter(zoom, x1, y0, lookupMode, centerClass);
+      int value01 = visualSampleOrCenter(zoom, x0, y1, lookupMode, centerClass);
+      int value11 = visualSampleOrCenter(zoom, x1, y1, lookupMode, centerClass);
+      return LandCoverTransition.selectVisualClass(
+         centerClass,
+         value00,
+         value10,
+         value01,
+         value11,
+         blendX - x0,
+         blendY - y0,
+         transitionStrength,
+         blockX,
+         blockZ,
+         sourceResolutionMeters / Math.max(worldScale, Double.MIN_NORMAL)
+      );
+   }
+
+   private int visualSampleOrCenter(
+      int zoom, int globalPixelX, int globalPixelY, LookupMode lookupMode, int centerClass
+   ) {
+      int sampled = this.sampleGrid(zoom, globalPixelX, globalPixelY, lookupMode);
+      return sampled == Integer.MIN_VALUE ? centerClass : sampled;
+   }
+
+   private int sampleGrid(int zoom, int globalPixelX, int globalPixelY, LookupMode lookupMode) {
+      return this.sampleGrid(zoom, globalPixelX, globalPixelY, lookupMode, null, null);
+   }
+
+   private int sampleGrid(
+      int zoom,
+      int globalPixelX,
+      int globalPixelY,
+      LookupMode lookupMode,
+      Map<TileKey, RasterTile> searchTiles,
+      Set<TileKey> unavailableTiles
+   ) {
+      int tilesPerAxis = 1 << zoom;
+      int tileX = Math.floorDiv(globalPixelX, RASTER_SIZE);
+      int tileY = Math.floorDiv(globalPixelY, RASTER_SIZE);
+      if (tileX < 0 || tileY < 0 || tileX >= tilesPerAxis || tileY >= tilesPerAxis) {
+         return Integer.MIN_VALUE;
+      }
+
+      TileKey key = new TileKey(zoom, tileX, tileY);
+      RasterTile tile = searchTiles == null ? null : searchTiles.get(key);
+      if (tile == null && unavailableTiles != null && unavailableTiles.contains(key)) {
+         return Integer.MIN_VALUE;
+      }
+      if (tile == null) {
+         tile = this.getTile(key, lookupMode);
+         if (tile != null && searchTiles != null) {
+            searchTiles.put(key, tile);
+         } else if (tile == null && unavailableTiles != null) {
+            unavailableTiles.add(key);
+         }
+      }
+      if (tile == null) {
+         return Integer.MIN_VALUE;
+      }
+      return tile.sample(Math.floorMod(globalPixelX, RASTER_SIZE), Math.floorMod(globalPixelY, RASTER_SIZE));
+   }
+
+   private RasterTile getTile(TileKey key, LookupMode lookupMode) {
+      RasterTile cached = this.cache.getIfPresent(key);
       if (cached != null) {
          return cached;
-      } else {
-         Path cachePath = this.cacheRoot.resolve(key.fileName());
-         if (!Files.exists(cachePath)) {
-            return TellusLandCoverSource.GeoTiffTile.MISSING;
+      }
+
+      if (lookupMode == LookupMode.MEMORY_ONLY) {
+         return null;
+      }
+      if (lookupMode == LookupMode.LOCAL_ONLY) {
+         return this.loadTileLocalOnly(key);
+      }
+
+      RasterTile local = this.loadTileLocalOnly(key);
+      if (local != null) {
+         return local;
+      }
+      this.ensureInitialized();
+      if (!this.available) {
+         return null;
+      }
+
+      try {
+         return this.cache.get(key);
+      } catch (Exception error) {
+         if (isInterruptedLoad(error)) {
+            Thread.currentThread().interrupt();
          } else {
-            try {
-               TellusLandCoverSource.GeoTiffTile opened = TellusLandCoverSource.GeoTiffTile.open(cachePath);
-               TellusLandCoverSource.GeoTiffTile raced = (TellusLandCoverSource.GeoTiffTile)this.cache.asMap().putIfAbsent(key, opened);
-               if (raced != null) {
-                  opened.close();
-                  return raced;
-               } else {
-                  return opened;
-               }
-            } catch (IOException error) {
-               Tellus.LOGGER.debug("Failed to load cached land cover tile {}", key, error);
-               return TellusLandCoverSource.GeoTiffTile.MISSING;
-            }
+            Tellus.LOGGER.warn("Failed to load Overture land-cover tile {}", key, error);
          }
+         return null;
       }
    }
 
-   private TellusLandCoverSource.GeoTiffTile getTileMemoryOnly(TellusLandCoverSource.TileKey key) {
-      TellusLandCoverSource.GeoTiffTile cached = (TellusLandCoverSource.GeoTiffTile)this.cache.getIfPresent(key);
-      return cached == null || cached == TellusLandCoverSource.GeoTiffTile.MISSING ? null : cached;
+   private RasterTile loadTileLocalOnly(TileKey key) {
+      RasterTile cached = this.cache.getIfPresent(key);
+      if (cached != null) {
+         return cached;
+      }
+
+      RasterTile local = this.readLocalTile(key);
+      if (local == null) {
+         return null;
+      }
+      RasterTile raced = this.cache.asMap().putIfAbsent(key, local);
+      return raced == null ? local : raced;
    }
 
-   private static boolean isInterruptedLoad(Throwable throwable) {
-      if (Thread.currentThread().isInterrupted()) {
-         return true;
-      } else {
-         for (Throwable current = throwable; current != null; current = current.getCause()) {
-            if (current instanceof ClosedByInterruptException || current instanceof InterruptedException || current instanceof InterruptedIOException) {
-               return true;
-            }
-         }
+   private RasterTile loadTileBlocking(TileKey key) throws IOException {
+      RasterTile local = this.readLocalTile(key);
+      if (local != null) {
+         return local;
+      }
 
+      this.ensureInitialized();
+      if (!this.available) {
+         throw new IOException("Overture base PMTiles is unavailable");
+      }
+
+      long generation = TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER);
+      byte[] payload = this.fetchTilePayloadWithRetry(key);
+      if (!TellusCacheRegistry.isCurrent(TellusCacheDomain.LAND_COVER, generation)) {
+         throw new IOException("Discarded stale Overture land-cover tile " + key);
+      }
+
+      RasterTile tile = new RasterTile(rasterizeVectorTile(payload, RASTER_SIZE));
+      if (!this.cacheRawTile(this.rawCachePath(key), payload, generation)) {
+         throw new IOException("Discarded stale Overture land-cover cache write for " + key);
+      }
+      this.cacheRasterTile(this.rasterCachePath(key), tile, generation);
+      return tile;
+   }
+
+   private RasterTile readLocalTile(TileKey key) {
+      Path rasterPath = this.rasterCachePath(key);
+      if (Files.exists(rasterPath)) {
+         try {
+            return readRasterTile(rasterPath);
+         } catch (IOException error) {
+            Tellus.LOGGER.debug("Invalid cached Overture land-cover raster {}, rebuilding", rasterPath, error);
+            deleteQuietly(rasterPath);
+         }
+      }
+
+      Path rawPath = this.rawCachePath(key);
+      if (!Files.exists(rawPath)) {
+         return null;
+      }
+      try {
+         byte[] payload = readGzipBytes(rawPath);
+         RasterTile tile = new RasterTile(rasterizeVectorTile(payload, RASTER_SIZE));
+         this.cacheRasterTile(rasterPath, tile, TellusCacheRegistry.generation(TellusCacheDomain.LAND_COVER));
+         return tile;
+      } catch (RuntimeException | IOException error) {
+         Tellus.LOGGER.debug("Invalid cached Overture land-cover MVT {}, refetching", rawPath, error);
+         deleteQuietly(rawPath);
+         return null;
+      }
+   }
+
+   private byte[] fetchTilePayloadWithRetry(TileKey key) throws IOException {
+      IOException lastFailure = null;
+      for (int attempt = 1; attempt <= FETCH_RETRY_ATTEMPTS; attempt++) {
+         try {
+            byte[] payload = this.pmTilesReader.getTileBytes(key.zoom(), key.x(), key.y());
+            return payload == null ? new byte[0] : payload;
+         } catch (IOException error) {
+            if (isInterruptedLoad(error)) {
+               Thread.currentThread().interrupt();
+               throw error;
+            }
+            lastFailure = error;
+         }
+      }
+      throw new IOException("Overture land-cover fetch failed for tile " + key, lastFailure);
+   }
+
+   private boolean cacheRawTile(Path cachePath, byte[] payload, long generation) {
+      try {
+         return TellusCacheFiles.writeIfCurrent(TellusCacheDomain.LAND_COVER, generation, cachePath, output -> {
+            try (OutputStream gzip = new GZIPOutputStream(output)) {
+               gzip.write(payload);
+            }
+         });
+      } catch (IOException error) {
+         Tellus.LOGGER.debug("Failed to cache Overture land-cover MVT {}", cachePath, error);
          return false;
       }
    }
 
-   private TellusLandCoverSource.GeoTiffTile loadTile(TellusLandCoverSource.TileKey key) throws IOException {
-      Path cachePath = this.cacheRoot.resolve(key.fileName());
-      if (Files.exists(cachePath)) {
-         return TellusLandCoverSource.GeoTiffTile.open(cachePath);
-      } else {
-         byte[] data = this.downloadTile(key);
-         if (data == null) {
-            return TellusLandCoverSource.GeoTiffTile.MISSING;
-         } else {
-            this.cacheTile(cachePath, data);
-            return TellusLandCoverSource.GeoTiffTile.open(cachePath);
-         }
-      }
-   }
-
-   private byte[] downloadTile(TellusLandCoverSource.TileKey key) throws IOException {
-      URI uri = URI.create(String.format("%s/%s", getEndpoint(), key.fileName()));
-      HttpURLConnection connection = (HttpURLConnection)uri.toURL().openConnection();
+   private void cacheRasterTile(Path cachePath, RasterTile tile, long generation) {
       try {
-         connection.setConnectTimeout(8000);
-         connection.setReadTimeout(8000);
-         connection.setRequestProperty("User-Agent", "Tellus/1.0 (Minecraft Mod)");
-         if (connection.getResponseCode() == 404) {
-            return null;
-         } else {
-            DownloadProgressReporter.requestStarted(connection.getContentLengthLong());
-
-            byte[] var5;
-            try (InputStream input = connection.getInputStream()) {
-               var5 = DownloadProgressReporter.readAllBytesWithProgress(input);
-            } finally {
-               DownloadProgressReporter.requestFinished();
+         TellusCacheFiles.writeIfCurrent(TellusCacheDomain.LAND_COVER, generation, cachePath, output -> {
+            try (DataOutputStream data = new DataOutputStream(new GZIPOutputStream(output))) {
+               data.writeInt(RASTER_CACHE_MAGIC);
+               data.writeInt(RASTER_CACHE_VERSION);
+               data.writeInt(RASTER_SIZE);
+               data.writeInt(tile.values.length);
+               data.write(tile.values);
             }
-
-            return var5;
-         }
-      } finally {
-         connection.disconnect();
+         });
+      } catch (IOException error) {
+         Tellus.LOGGER.debug("Failed to cache parsed Overture land-cover raster {}", cachePath, error);
       }
    }
 
-   private void cacheTile(Path cachePath, byte[] data) {
+   private static RasterTile readRasterTile(Path path) throws IOException {
+      int expectedLength = RASTER_SIZE * RASTER_SIZE;
+      byte[] decoded;
+      try (InputStream input = new GZIPInputStream(Files.newInputStream(path))) {
+         decoded = PmTilesSafety.readBounded(
+            input, 16 + expectedLength, "Cached Overture land-cover raster"
+         );
+      }
+      try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(decoded))) {
+         if (input.readInt() != RASTER_CACHE_MAGIC || input.readInt() != RASTER_CACHE_VERSION) {
+            throw new IOException("Unsupported land-cover raster cache format");
+         }
+         int rasterSize = input.readInt();
+         int length = input.readInt();
+         if (rasterSize != RASTER_SIZE || length != expectedLength) {
+            throw new IOException("Land-cover raster cache dimensions do not match configuration");
+         }
+         byte[] values = input.readNBytes(length);
+         if (values.length != length) {
+            throw new EOFException("Truncated land-cover raster cache");
+         }
+         if (input.read() != -1) {
+            throw new IOException("Land-cover raster cache contains trailing data");
+         }
+         return new RasterTile(values);
+      }
+   }
+
+   static byte[] rasterizeVectorTile(byte[] payload, int rasterSize) {
+      byte[] values = new byte[rasterSize * rasterSize];
+      if (payload == null || payload.length == 0) {
+         return values;
+      }
+
+      Tile tile;
       try {
-         Files.createDirectories(cachePath.getParent());
-         Path tempPath = cachePath.resolveSibling(cachePath.getFileName() + ".tmp");
-         Files.write(tempPath, data);
-         Files.move(tempPath, cachePath, StandardCopyOption.REPLACE_EXISTING);
-      } catch (IOException var4) {
-         Tellus.LOGGER.warn("Failed to cache land cover tile {}", cachePath, var4);
+         tile = Tile.parseFrom(payload);
+      } catch (Exception error) {
+         throw new IllegalArgumentException("Failed to decode Overture base MVT payload", error);
       }
+
+      List<RasterFeature> landCoverFeatures = new ArrayList<>();
+      for (Layer layer : tile.getLayersList()) {
+         if (!LAND_COVER_LAYER_NAME.equals(layer.getName())) {
+            continue;
+         }
+
+         int extent = layer.hasExtent() && layer.getExtent() > 0 ? layer.getExtent() : DEFAULT_TILE_EXTENT;
+         for (Feature feature : layer.getFeaturesList()) {
+            if (feature.getType() != GeomType.POLYGON) {
+               continue;
+            }
+
+            int coverClass = coverClassForSubtype(tagString(feature, layer, "subtype"));
+            if (coverClass < 0) {
+               continue;
+            }
+            List<Ring> rings = decodePolygonRings(feature.getGeometryList(), (double)rasterSize / extent);
+            if (rings.isEmpty()) {
+               continue;
+            }
+            int sortKey = parseSortKey(tagString(feature, layer, "cartography"));
+            landCoverFeatures.add(new RasterFeature(coverClass, sortKey, rings));
+         }
+      }
+
+      // Overture assigns lower sort keys to features that should be drawn in
+      // front. Rasterize the background first so lower-key features win where
+      // polygons overlap.
+      landCoverFeatures.sort(Comparator.comparingInt(RasterFeature::sortKey).reversed());
+      for (RasterFeature feature : landCoverFeatures) {
+         rasterizeFeature(values, rasterSize, feature);
+      }
+      return values;
    }
 
-   private static final class CoverSmoothScratch {
-      private final int[] counts = new int[256];
-      private final int[] used = new int[256];
-      private int usedCount;
-
-      private void reset() {
-         for (int i = 0; i < this.usedCount; i++) {
-            this.counts[this.used[i]] = 0;
-         }
-
-         this.usedCount = 0;
-      }
-
-      private void add(int value) {
-         if (this.counts[value] == 0) {
-            this.used[this.usedCount++] = value;
-         }
-
-         this.counts[value]++;
-      }
-
-      private int pickMajority(int centerValue) {
-         if (this.usedCount == 0) {
-            return centerValue;
-         } else {
-            int bestValue = centerValue;
-            int bestCount = -1;
-
-            for (int i = 0; i < this.usedCount; i++) {
-               int value = this.used[i];
-               int count = this.counts[value];
-               if (count > bestCount || count == bestCount && value == centerValue) {
-                  bestCount = count;
-                  bestValue = value;
-               }
-            }
-
-            return bestValue;
+   private static void rasterizeFeature(byte[] values, int rasterSize, RasterFeature feature) {
+      int minY = rasterSize - 1;
+      int maxY = 0;
+      boolean hasPoints = false;
+      for (Ring ring : feature.rings()) {
+         for (double y : ring.ys()) {
+            minY = Math.min(minY, Math.max(0, (int)Math.floor(y)));
+            maxY = Math.max(maxY, Math.min(rasterSize - 1, (int)Math.floor(y)));
+            hasPoints = true;
          }
       }
-   }
-
-   private static final class CoverBlendScratch {
-      private final double[] weights = new double[256];
-      private final int[] used = new int[256];
-      private int usedCount;
-
-      private void reset() {
-         for (int i = 0; i < this.usedCount; i++) {
-            this.weights[this.used[i]] = 0.0;
-         }
-
-         this.usedCount = 0;
+      if (!hasPoints || minY > maxY) {
+         return;
       }
 
-      private void add(int value, double weight) {
-         if (weight > 0.0) {
-            if (!(this.weights[value] > 0.0)) {
-               this.used[this.usedCount++] = value;
-            }
-
-            this.weights[value] += weight;
-         }
-      }
-
-      private int pickWeighted(int fallbackValue, double threshold) {
-         if (this.usedCount == 0) {
-            return fallbackValue;
-         } else {
-            double total = 0.0;
-
-            for (int i = 0; i < this.usedCount; i++) {
-               total += this.weights[this.used[i]];
-            }
-
-            if (!(total > 0.0)) {
-               return fallbackValue;
-            } else {
-               double target = Mth.clamp(threshold, 0.0, 0.9999999999999999) * total;
-               double cumulative = 0.0;
-               int lastValue = fallbackValue;
-
-               for (int i = 0; i < this.usedCount; i++) {
-                  int value = this.used[i];
-                  lastValue = value;
-                  cumulative += this.weights[value];
-                  if (target < cumulative || i + 1 == this.usedCount) {
-                     return value;
+      double[] intersections = new double[32];
+      byte encodedClass = (byte)feature.coverClass();
+      for (int pixelY = minY; pixelY <= maxY; pixelY++) {
+         double scanY = pixelY + 0.5;
+         int intersectionCount = 0;
+         for (Ring ring : feature.rings()) {
+            double[] xs = ring.xs();
+            double[] ys = ring.ys();
+            for (int i = 0, j = xs.length - 1; i < xs.length; j = i++) {
+               double yA = ys[i];
+               double yB = ys[j];
+               if ((yA > scanY) != (yB > scanY)) {
+                  if (intersectionCount == intersections.length) {
+                     intersections = Arrays.copyOf(intersections, intersections.length * 2);
                   }
+                  intersections[intersectionCount++] = xs[i] + (scanY - yA) * (xs[j] - xs[i]) / (yB - yA);
                }
-
-               return lastValue;
             }
          }
+         if (intersectionCount < 2) {
+            continue;
+         }
+
+         Arrays.sort(intersections, 0, intersectionCount);
+         int rowOffset = pixelY * rasterSize;
+         for (int i = 0; i + 1 < intersectionCount; i += 2) {
+            double left = Math.min(intersections[i], intersections[i + 1]);
+            double right = Math.max(intersections[i], intersections[i + 1]);
+            int startX = Math.max(0, (int)Math.ceil(left - 0.5));
+            int endX = Math.min(rasterSize - 1, (int)Math.floor(right - 0.5));
+            if (startX <= endX) {
+               Arrays.fill(values, rowOffset + startX, rowOffset + endX + 1, encodedClass);
+            }
+         }
+      }
+   }
+
+   private static List<Ring> decodePolygonRings(List<Integer> geometry, double scale) {
+      if (geometry == null || geometry.isEmpty()) {
+         return List.of();
+      }
+
+      List<Ring> rings = new ArrayList<>();
+      List<Double> currentX = null;
+      List<Double> currentY = null;
+      int cursorX = 0;
+      int cursorY = 0;
+      int cursor = 0;
+      while (cursor < geometry.size()) {
+         int commandAndCount = geometry.get(cursor++);
+         int command = commandAndCount & 7;
+         int count = commandAndCount >>> 3;
+         if (count <= 0) {
+            continue;
+         }
+
+         if (command == 1 || command == 2) {
+            for (int i = 0; i < count; i++) {
+               if (cursor + 1 >= geometry.size()) {
+                  addRing(rings, currentX, currentY);
+                  return rings;
+               }
+               cursorX += zigZagDecode(geometry.get(cursor++));
+               cursorY += zigZagDecode(geometry.get(cursor++));
+               if (command == 1) {
+                  addRing(rings, currentX, currentY);
+                  currentX = new ArrayList<>();
+                  currentY = new ArrayList<>();
+               } else if (currentX == null) {
+                  currentX = new ArrayList<>();
+                  currentY = new ArrayList<>();
+               }
+               currentX.add(cursorX * scale);
+               currentY.add(cursorY * scale);
+            }
+         } else if (command == 7) {
+            addRing(rings, currentX, currentY);
+            currentX = null;
+            currentY = null;
+         } else {
+            break;
+         }
+      }
+      addRing(rings, currentX, currentY);
+      return rings;
+   }
+
+   private static void addRing(List<Ring> rings, List<Double> xs, List<Double> ys) {
+      if (xs == null || ys == null || xs.size() != ys.size() || xs.size() < 3) {
+         return;
+      }
+
+      double[] ringX = new double[xs.size()];
+      double[] ringY = new double[ys.size()];
+      for (int i = 0; i < xs.size(); i++) {
+         ringX[i] = xs.get(i);
+         ringY[i] = ys.get(i);
+      }
+      rings.add(new Ring(ringX, ringY));
+   }
+
+   private static int zigZagDecode(int encoded) {
+      return encoded >>> 1 ^ -(encoded & 1);
+   }
+
+   static int coverClassForSubtype(String subtype) {
+      if (subtype == null || subtype.isBlank()) {
+         return -1;
+      }
+      return switch (subtype.trim().toLowerCase(Locale.ROOT)) {
+         case "forest" -> TREE_COVER_CLASS;
+         case "shrub" -> SHRUBLAND_CLASS;
+         case "grass" -> GRASSLAND_CLASS;
+         case "crop" -> CROPLAND_CLASS;
+         case "urban" -> BUILT_UP_CLASS;
+         case "barren" -> BARE_CLASS;
+         case "snow" -> SNOW_ICE_CLASS;
+         case "wetland" -> WETLAND_CLASS;
+         case "mangrove" -> MANGROVES_CLASS;
+         case "moss" -> MOSS_LICHEN_CLASS;
+         default -> -1;
+      };
+   }
+
+   private static String tagString(Feature feature, Layer layer, String requestedKey) {
+      List<Integer> tags = feature.getTagsList();
+      for (int i = 0; i + 1 < tags.size(); i += 2) {
+         int keyIndex = tags.get(i);
+         int valueIndex = tags.get(i + 1);
+         if (keyIndex >= 0
+            && keyIndex < layer.getKeysCount()
+            && valueIndex >= 0
+            && valueIndex < layer.getValuesCount()
+            && requestedKey.equals(layer.getKeys(keyIndex))) {
+            Value value = layer.getValues(valueIndex);
+            return value.hasStringValue() ? value.getStringValue() : String.valueOf(decodeValue(value));
+         }
+      }
+      return null;
+   }
+
+   private static Object decodeValue(Value value) {
+      if (value.hasDoubleValue()) {
+         return value.getDoubleValue();
+      } else if (value.hasFloatValue()) {
+         return value.getFloatValue();
+      } else if (value.hasSintValue()) {
+         return value.getSintValue();
+      } else if (value.hasIntValue()) {
+         return value.getIntValue();
+      } else if (value.hasUintValue()) {
+         return value.getUintValue();
+      } else if (value.hasBoolValue()) {
+         return value.getBoolValue();
+      }
+      return "";
+   }
+
+   private static int parseSortKey(String cartography) {
+      if (cartography == null) {
+         return 0;
+      }
+      Matcher matcher = SORT_KEY_PATTERN.matcher(cartography);
+      if (!matcher.find()) {
+         return 0;
+      }
+      try {
+         return Integer.parseInt(matcher.group(1));
+      } catch (NumberFormatException ignored) {
+         return 0;
+      }
+   }
+
+   private int queryZoom(double resolutionMeters, LookupMode lookupMode) {
+      if (lookupMode == LookupMode.BLOCKING) {
+         this.ensureInitialized();
+      }
+      return selectZoom(resolutionMeters, this.minZoom, this.maxZoom, RASTER_SIZE);
+   }
+
+   static int selectZoom(double effectiveResolutionMeters, int minZoom, int maxZoom, int rasterSize) {
+      int low = Math.max(0, Math.min(minZoom, maxZoom));
+      int high = Math.max(low, maxZoom);
+      double resolution = Double.isFinite(effectiveResolutionMeters) && effectiveResolutionMeters > 0.0
+         ? Math.max(SOURCE_RESOLUTION_METERS, effectiveResolutionMeters)
+         : SOURCE_RESOLUTION_METERS;
+      double ratio = WEB_MERCATOR_CIRCUMFERENCE_METERS / (Math.max(1, rasterSize) * resolution);
+      int desired = ratio > 1.0 ? (int)Math.ceil(Math.log(ratio) / Math.log(2.0)) : 0;
+      return Math.max(low, Math.min(high, desired));
+   }
+
+   private void ensureInitialized() {
+      if (this.initialized) {
+         return;
+      }
+      long now = System.nanoTime();
+      if (!retryDeadlineReached(now, this.nextInitializationAttemptNanos)) {
+         return;
+      }
+      synchronized (this.initLock) {
+         if (this.initialized || !retryDeadlineReached(System.nanoTime(), this.nextInitializationAttemptNanos)) {
+            return;
+         }
+
+         boolean sourceAvailable = false;
+         try {
+            PmTilesRangeReader.PmTilesHeader header = this.pmTilesReader.header();
+            if (header.tileType() != PMTILES_TILETYPE_MVT) {
+               throw new IOException("Unexpected Overture base PMTiles tile type " + header.tileType());
+            }
+            int resolvedMin = Math.max(DEFAULT_MIN_LAND_COVER_ZOOM, header.minZoom());
+            int resolvedMax = header.maxZoom();
+            if (resolvedMax < resolvedMin) {
+               throw new IOException("Overture base PMTiles has no supported land-cover zooms");
+            }
+            this.minZoom = resolvedMin;
+            this.maxZoom = resolvedMax;
+            sourceAvailable = true;
+            this.initializationFailures = 0;
+            this.nextInitializationAttemptNanos = 0L;
+         } catch (IOException error) {
+            if (isInterruptedLoad(error)) {
+               Thread.currentThread().interrupt();
+               this.nextInitializationAttemptNanos = 0L;
+               Tellus.LOGGER.debug("Overture land-cover PMTiles initialization interrupted", error);
+            } else {
+               int failures = ++this.initializationFailures;
+               long delaySeconds = retryDelaySeconds(failures);
+               this.nextInitializationAttemptNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(delaySeconds);
+               Tellus.LOGGER.warn("Overture base PMTiles unavailable; retrying land cover in {}s", delaySeconds, error);
+            }
+         }
+         this.available = sourceAvailable;
+         this.initialized = sourceAvailable;
+      }
+   }
+
+   static long retryDelaySeconds(int failureCount) {
+      if (failureCount <= 0) {
+         return 0L;
+      }
+      return failureCount <= 5 ? 1L << failureCount - 1 : 60L;
+   }
+
+   private static boolean retryDeadlineReached(long now, long deadline) {
+      return deadline == 0L || now - deadline >= 0L;
+   }
+
+   private void prefetchTile(TileKey key) {
+      if (this.cache.getIfPresent(key) != null) {
+         return;
+      }
+      try {
+         this.cache.get(key);
+      } catch (Exception error) {
+         if (isInterruptedLoad(error)) {
+            Thread.currentThread().interrupt();
+         } else {
+            Tellus.LOGGER.debug("Failed to prefetch Overture land-cover tile {}", key, error);
+         }
+      }
+   }
+
+   private Path rawCachePath(TileKey key) {
+      return this.cacheRoot.resolve(key.zoom() + "/" + key.x() + "/" + key.y() + ".mvt.gz");
+   }
+
+   private Path rasterCachePath(TileKey key) {
+      return this.cacheRoot.resolve(key.zoom() + "/" + key.x() + "/" + key.y() + ".raster-v" + RASTER_CACHE_VERSION + ".gz");
+   }
+
+   private static TilePosition tilePosition(double lon, double lat, int zoom) {
+      if (!Double.isFinite(lon) || !Double.isFinite(lat) || lon < MIN_LON || lon > MAX_LON || lat < MIN_LAT || lat > MAX_LAT) {
+         return null;
+      }
+      double safeLon = lon == MAX_LON ? Math.nextDown(MAX_LON) : lon;
+      double safeLat = Math.max(MIN_LAT, Math.min(MAX_LAT, lat));
+      int tilesPerAxis = 1 << zoom;
+      double tileXValue = (safeLon + 180.0) / 360.0 * tilesPerAxis;
+      double radians = Math.toRadians(safeLat);
+      double mercator = Math.log(Math.tan(radians) + 1.0 / Math.cos(radians));
+      double tileYValue = (1.0 - mercator / Math.PI) * 0.5 * tilesPerAxis;
+      tileXValue = Math.max(0.0, Math.min(Math.nextDown((double)tilesPerAxis), tileXValue));
+      tileYValue = Math.max(0.0, Math.min(Math.nextDown((double)tilesPerAxis), tileYValue));
+      int tileX = (int)Math.floor(tileXValue);
+      int tileY = (int)Math.floor(tileYValue);
+      double globalPixelCoordinateX = tileXValue * RASTER_SIZE;
+      double globalPixelCoordinateY = tileYValue * RASTER_SIZE;
+      int pixelX = Math.min(RASTER_SIZE - 1, (int)Math.floor((tileXValue - tileX) * RASTER_SIZE));
+      int pixelY = Math.min(RASTER_SIZE - 1, (int)Math.floor((tileYValue - tileY) * RASTER_SIZE));
+      return new TilePosition(
+         new TileKey(zoom, tileX, tileY),
+         pixelX,
+         pixelY,
+         globalPixelCoordinateX,
+         globalPixelCoordinateY
+      );
+   }
+
+   private static double effectiveSampleResolutionMeters(double worldScale, double previewResolutionMeters) {
+      return Double.isFinite(previewResolutionMeters) && previewResolutionMeters > 0.0
+         ? Math.max(worldScale, previewResolutionMeters)
+         : worldScale;
+   }
+
+   private static byte[] readGzipBytes(Path path) throws IOException {
+      try (InputStream input = new GZIPInputStream(Files.newInputStream(path))) {
+         return PmTilesSafety.readBounded(
+            input, PmTilesSafety.MAX_DECOMPRESSED_TILE_BYTES, "Cached Overture land-cover tile"
+         );
+      }
+   }
+
+   private static void deleteQuietly(Path path) {
+      try {
+         Files.deleteIfExists(path);
+      } catch (IOException error) {
+         Tellus.LOGGER.debug("Failed to delete invalid land-cover cache file {}", path, error);
+      }
+   }
+
+   static boolean isInterruptedLoad(Throwable throwable) {
+      if (Thread.currentThread().isInterrupted()) {
+         return true;
+      }
+      for (Throwable current = throwable; current != null; current = current.getCause()) {
+         if (current instanceof ClosedByInterruptException
+            || current instanceof InterruptedException
+            || current instanceof InterruptedIOException && !(current instanceof SocketTimeoutException)) {
+            return true;
+         }
+      }
+      return false;
+   }
+
+   static boolean isWithinTileCoverage(double blockX, double blockZ, double worldScale) {
+      if (!(Double.isFinite(worldScale) && worldScale > 0.0)
+         || !Double.isFinite(blockX)
+         || !Double.isFinite(blockZ)) {
+         return false;
+      }
+
+      double blocksPerDegree = EarthProjection.blocksPerDegree(worldScale);
+      double lon = blockX / blocksPerDegree;
+      double zA = EarthProjection.latToBlockZ(MIN_LAT, worldScale);
+      double zB = EarthProjection.latToBlockZ(MAX_LAT, worldScale);
+      return lon >= MIN_LON && lon <= MAX_LON && blockZ >= Math.min(zA, zB) && blockZ <= Math.max(zA, zB);
+   }
+
+   private static boolean isGlobalPixelInBounds(int zoom, int globalPixelX, int globalPixelY) {
+      long pixelsPerAxis = (1L << zoom) * RASTER_SIZE;
+      return globalPixelX >= 0 && globalPixelY >= 0 && globalPixelX < pixelsPerAxis && globalPixelY < pixelsPerAxis;
+   }
+
+   private static int intProperty(String key, int defaultValue, int minInclusive, int maxInclusive) {
+      String value = System.getProperty(key);
+      if (value == null || value.isBlank()) {
+         return defaultValue;
+      }
+      try {
+         return Math.max(minInclusive, Math.min(maxInclusive, Integer.parseInt(value.trim())));
+      } catch (NumberFormatException error) {
+         Tellus.LOGGER.warn("Invalid integer system property {}={}, using {}", key, value, defaultValue);
+         return defaultValue;
       }
    }
 
@@ -805,433 +1438,73 @@ public final class TellusLandCoverSource implements TellusCacheHandle {
 
    @Override
    public void clearCache() {
+      this.worldCoverSource.clearMemoryCache();
       this.cache.invalidateAll();
       this.cache.cleanUp();
+      this.nearestLandCache.invalidateAll();
+      this.nearestLandCache.cleanUp();
    }
 
-   private static final class GeoTiffTile {
-      private static final int TAG_IMAGE_WIDTH = 256;
-      private static final int TAG_IMAGE_HEIGHT = 257;
-      private static final int TAG_TILE_WIDTH = 322;
-      private static final int TAG_TILE_HEIGHT = 323;
-      private static final int TAG_TILE_OFFSETS = 324;
-      private static final int TAG_TILE_BYTE_COUNTS = 325;
-      private static final int TAG_COMPRESSION = 259;
-      private static final int TAG_MODEL_PIXEL_SCALE = 33550;
-      private static final int TAG_MODEL_TIEPOINT = 33922;
-      private static final int TYPE_SHORT = 3;
-      private static final int TYPE_LONG = 4;
-      private static final int COMPRESSION_DEFLATE = 8;
-      private static final TellusLandCoverSource.GeoTiffTile MISSING = new TellusLandCoverSource.GeoTiffTile();
-      private final Path path;
-      private final FileChannel channel;
-      private final int width;
-      private final int height;
-      private final int tileWidth;
-      private final int tileHeight;
-      private final int tilesPerRow;
-      private final long[] tileOffsets;
-      private final int[] tileByteCounts;
-      private final double pixelScaleX;
-      private final double pixelScaleY;
-      private final double tieLon;
-      private final double tieLat;
-      private final Map<Integer, byte[]> tileCache;
+   private enum LookupMode {
+      BLOCKING,
+      LOCAL_ONLY,
+      MEMORY_ONLY
+   }
 
-      private GeoTiffTile() {
-         this.path = null;
-         this.channel = null;
-         this.width = 0;
-         this.height = 0;
-         this.tileWidth = 0;
-         this.tileHeight = 0;
-         this.tilesPerRow = 0;
-         this.tileOffsets = null;
-         this.tileByteCounts = null;
-         this.pixelScaleX = 0.0;
-         this.pixelScaleY = 0.0;
-         this.tieLon = 0.0;
-         this.tieLat = 0.0;
-         this.tileCache = Map.of();
-      }
+   private static final class RasterTile {
+      private final byte[] values;
 
-      private GeoTiffTile(
-         Path path,
-         FileChannel channel,
-         int width,
-         int height,
-         int tileWidth,
-         int tileHeight,
-         long[] tileOffsets,
-         int[] tileByteCounts,
-         double pixelScaleX,
-         double pixelScaleY,
-         double tieLon,
-         double tieLat
-      ) {
-         this.path = path;
-         this.channel = channel;
-         this.width = width;
-         this.height = height;
-         this.tileWidth = tileWidth;
-         this.tileHeight = tileHeight;
-         this.tilesPerRow = (int)Math.ceil((double)width / tileWidth);
-         this.tileOffsets = tileOffsets;
-         this.tileByteCounts = tileByteCounts;
-         this.pixelScaleX = pixelScaleX;
-         this.pixelScaleY = pixelScaleY;
-         this.tieLon = tieLon;
-         this.tieLat = tieLat;
-         this.tileCache = new LinkedHashMap<Integer, byte[]>(TellusLandCoverSource.TILE_CACHE_ENTRIES, 0.75F, true) {
-            @Override
-            protected boolean removeEldestEntry(Entry<Integer, byte[]> eldest) {
-               return this.size() > TellusLandCoverSource.TILE_CACHE_ENTRIES;
-            }
-         };
-      }
-
-      static TellusLandCoverSource.GeoTiffTile open(Path path) throws IOException {
-         FileChannel channel = FileChannel.open(path, StandardOpenOption.READ);
-
-         try {
-            return readFromChannel(path, channel);
-         } catch (IOException var3) {
-            channel.close();
-            throw var3;
+      private RasterTile(byte[] values) {
+         if (values.length != RASTER_SIZE * RASTER_SIZE) {
+            throw new IllegalArgumentException("Unexpected land-cover raster size " + values.length);
          }
+         this.values = values;
       }
 
-      int sample(double lon, double lat) {
-         TellusLandCoverSource.Pixel pixel = this.toPixel(lon, lat);
-         return pixel == null ? 0 : this.sampleValue(pixel.x, pixel.y);
-      }
-
-      TellusLandCoverSource.ContinuousPixel toContinuousPixel(double lon, double lat) {
-         if (this == MISSING) {
-            return null;
-         } else {
-            double pixelX = (lon - this.tieLon) / this.pixelScaleX;
-            double pixelY = (this.tieLat - lat) / this.pixelScaleY;
-            return pixelX >= 0.0 && pixelY >= 0.0 && pixelX < this.width && pixelY < this.height
-               ? new TellusLandCoverSource.ContinuousPixel(pixelX, pixelY)
-               : null;
+      private int sample(int pixelX, int pixelY) {
+         if (pixelX < 0 || pixelY < 0 || pixelX >= RASTER_SIZE || pixelY >= RASTER_SIZE) {
+            return Integer.MIN_VALUE;
          }
-      }
-
-      TellusLandCoverSource.Pixel toPixel(double lon, double lat) {
-         if (this == MISSING) {
-            return null;
-         } else {
-            int pixelX = (int)Math.floor((lon - this.tieLon) / this.pixelScaleX);
-            int pixelY = (int)Math.floor((this.tieLat - lat) / this.pixelScaleY);
-            return pixelX >= 0 && pixelY >= 0 && pixelX < this.width && pixelY < this.height ? new TellusLandCoverSource.Pixel(pixelX, pixelY) : null;
-         }
-      }
-
-      int sampleValue(int pixelX, int pixelY) {
-         if (this != MISSING && pixelX >= 0 && pixelY >= 0 && pixelX < this.width && pixelY < this.height) {
-            int tileX = pixelX / this.tileWidth;
-            int tileY = pixelY / this.tileHeight;
-            int tileIndex = tileY * this.tilesPerRow + tileX;
-
-            byte[] tile;
-            try {
-               tile = this.getTile(tileIndex);
-            } catch (ClosedByInterruptException var9) {
-               Thread.currentThread().interrupt();
-               return 0;
-            } catch (IOException var10) {
-               Tellus.LOGGER.warn("Failed to read land cover tile {} in {}", new Object[]{tileIndex, this.path, var10});
-               return 0;
-            }
-
-            int localX = pixelX - tileX * this.tileWidth;
-            int localY = pixelY - tileY * this.tileHeight;
-            return Byte.toUnsignedInt(tile[localX + localY * this.tileWidth]);
-         } else {
-            return 0;
-         }
-      }
-
-      boolean isInside(int pixelX, int pixelY) {
-         return pixelX >= 0 && pixelY >= 0 && pixelX < this.width && pixelY < this.height;
-      }
-
-      boolean isNeighborhoodInBounds(int pixelX, int pixelY, int radius) {
-         return pixelX - radius >= 0 && pixelY - radius >= 0 && pixelX + radius < this.width && pixelY + radius < this.height;
-      }
-
-      double lonForPixel(int pixelX) {
-         return this.tieLon + (pixelX + 0.5) * this.pixelScaleX;
-      }
-
-      double latForPixel(int pixelY) {
-         return this.tieLat - (pixelY + 0.5) * this.pixelScaleY;
-      }
-
-      void close() {
-         if (this.channel != null) {
-            synchronized (this.tileCache) {
-               this.tileCache.clear();
-            }
-
-            try {
-               this.channel.close();
-            } catch (IOException var2) {
-               Tellus.LOGGER.warn("Failed to close land cover tile {}", this.path, var2);
-            }
-         }
-      }
-
-      private byte[] getTile(int tileIndex) throws IOException {
-         synchronized (this.tileCache) {
-            byte[] cached = this.tileCache.get(tileIndex);
-            if (cached != null) {
-               return cached;
-            }
-         }
-
-         byte[] tile = this.readTile(tileIndex);
-         synchronized (this.tileCache) {
-            this.tileCache.put(tileIndex, tile);
-            return tile;
-         }
-      }
-
-      private byte[] readTile(int tileIndex) throws IOException {
-         long offset = this.tileOffsets[tileIndex];
-         int length = this.tileByteCounts[tileIndex];
-         byte[] compressed = new byte[length];
-
-         try {
-            readFully(this.channel, compressed, offset);
-         } catch (ClosedChannelException var12) {
-            if (this.path == null) {
-               throw var12;
-            }
-
-            try (FileChannel reopened = FileChannel.open(this.path, StandardOpenOption.READ)) {
-               readFully(reopened, compressed, offset);
-            }
-         }
-
-         return inflate(compressed, this.tileWidth * this.tileHeight);
-      }
-
-      private static TellusLandCoverSource.GeoTiffTile readFromChannel(Path path, FileChannel channel) throws IOException {
-         ByteBuffer header = ByteBuffer.allocate(8);
-         readFully(channel, header, 0L);
-         header.flip();
-         short order = header.getShort();
-
-         ByteOrder byteOrder = switch (order) {
-            case 18761 -> ByteOrder.LITTLE_ENDIAN;
-            case 19789 -> ByteOrder.BIG_ENDIAN;
-            default -> throw new IOException("Invalid TIFF byte order");
-         };
-         header.order(byteOrder);
-         short magic = header.getShort();
-         if (magic != 42) {
-            throw new IOException("Invalid TIFF magic");
-         } else {
-            int ifdOffset = header.getInt();
-            ByteBuffer countBuffer = ByteBuffer.allocate(2).order(byteOrder);
-            readFully(channel, countBuffer, ifdOffset);
-            countBuffer.flip();
-            int entryCount = Short.toUnsignedInt(countBuffer.getShort());
-            ByteBuffer entries = ByteBuffer.allocate(entryCount * 12).order(byteOrder);
-            readFully(channel, entries, ifdOffset + 2L);
-            entries.flip();
-            int width = -1;
-            int height = -1;
-            int tileWidth = -1;
-            int tileHeight = -1;
-            int compression = -1;
-            long[] tileOffsets = null;
-            int[] tileByteCounts = null;
-            double[] pixelScale = null;
-            double[] tiepoint = null;
-
-            for (int i = 0; i < entryCount; i++) {
-               int tag = Short.toUnsignedInt(entries.getShort());
-               int type = Short.toUnsignedInt(entries.getShort());
-               int count = entries.getInt();
-               int value = entries.getInt();
-               switch (tag) {
-                  case TAG_IMAGE_WIDTH:
-                     width = readIntValue(type, count, value, byteOrder);
-                     break;
-                  case TAG_IMAGE_HEIGHT:
-                     height = readIntValue(type, count, value, byteOrder);
-                     break;
-                  case TAG_COMPRESSION:
-                     compression = readIntValue(type, count, value, byteOrder);
-                     break;
-                  case TAG_TILE_WIDTH:
-                     tileWidth = readIntValue(type, count, value, byteOrder);
-                     break;
-                  case TAG_TILE_HEIGHT:
-                     tileHeight = readIntValue(type, count, value, byteOrder);
-                     break;
-                  case TAG_TILE_OFFSETS:
-                     tileOffsets = readLongArray(channel, value, count, byteOrder);
-                     break;
-                  case TAG_TILE_BYTE_COUNTS:
-                     tileByteCounts = readIntArray(channel, value, count, byteOrder);
-                     break;
-                  case TAG_MODEL_PIXEL_SCALE:
-                     pixelScale = readDoubleArray(channel, value, count, byteOrder);
-                     break;
-                  case TAG_MODEL_TIEPOINT:
-                     tiepoint = readDoubleArray(channel, value, count, byteOrder);
-               }
-            }
-
-            if (compression != COMPRESSION_DEFLATE) {
-               throw new IOException("Unsupported TIFF compression " + compression);
-            } else if (width <= 0 || height <= 0 || tileWidth <= 0 || tileHeight <= 0) {
-               throw new IOException("Missing TIFF size tags");
-            } else if (tileOffsets == null || tileByteCounts == null) {
-               throw new IOException("Missing TIFF tile offsets");
-            } else if (pixelScale != null && pixelScale.length >= 2 && tiepoint != null && tiepoint.length >= 5) {
-               return new TellusLandCoverSource.GeoTiffTile(
-                  path, channel, width, height, tileWidth, tileHeight, tileOffsets, tileByteCounts, pixelScale[0], pixelScale[1], tiepoint[3], tiepoint[4]
-               );
-            } else {
-               throw new IOException("Missing TIFF georeference tags");
-            }
-         }
-      }
-
-      private static int readIntValue(int type, int count, int value, ByteOrder order) throws IOException {
-         if (count != 1) {
-            throw new IOException("Expected single TIFF value");
-         } else {
-            ByteBuffer buffer = ByteBuffer.allocate(4).order(order);
-            buffer.putInt(value);
-            buffer.flip();
-            if (type == TYPE_SHORT) {
-               return Short.toUnsignedInt(buffer.getShort());
-            } else if (type == TYPE_LONG) {
-               return buffer.getInt();
-            } else {
-               throw new IOException("Unsupported TIFF value type " + type);
-            }
-         }
-      }
-
-      private static long[] readLongArray(FileChannel channel, long offset, int count, ByteOrder order) throws IOException {
-         if (count <= 0) {
-            return new long[0];
-         } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 4).order(order);
-            readFully(channel, buffer, offset);
-            buffer.flip();
-            long[] values = new long[count];
-
-            for (int i = 0; i < count; i++) {
-               values[i] = Integer.toUnsignedLong(buffer.getInt());
-            }
-
-            return values;
-         }
-      }
-
-      private static int[] readIntArray(FileChannel channel, long offset, int count, ByteOrder order) throws IOException {
-         if (count <= 0) {
-            return new int[0];
-         } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 4).order(order);
-            readFully(channel, buffer, offset);
-            buffer.flip();
-            int[] values = new int[count];
-
-            for (int i = 0; i < count; i++) {
-               values[i] = buffer.getInt();
-            }
-
-            return values;
-         }
-      }
-
-      private static double[] readDoubleArray(FileChannel channel, long offset, int count, ByteOrder order) throws IOException {
-         if (count <= 0) {
-            return new double[0];
-         } else {
-            ByteBuffer buffer = ByteBuffer.allocate(count * 8).order(order);
-            readFully(channel, buffer, offset);
-            buffer.flip();
-            double[] values = new double[count];
-
-            for (int i = 0; i < count; i++) {
-               values[i] = buffer.getDouble();
-            }
-
-            return values;
-         }
-      }
-
-      private static void readFully(FileChannel channel, ByteBuffer buffer, long offset) throws IOException {
-         long position = offset;
-
-         while (buffer.hasRemaining()) {
-            int read = channel.read(buffer, position);
-            if (read < 0) {
-               throw new EOFException("Unexpected end of file");
-            }
-
-            position += read;
-         }
-      }
-
-      private static void readFully(FileChannel channel, byte[] dest, long offset) throws IOException {
-         readFully(channel, ByteBuffer.wrap(dest), offset);
-      }
-
-      private static byte[] inflate(byte[] compressed, int expectedSize) throws IOException {
-         byte[] output = new byte[expectedSize];
-
-         byte[] var8;
-         try (InflaterInputStream inflater = new InflaterInputStream(new ByteArrayInputStream(compressed))) {
-            int offset = 0;
-
-            while (offset < expectedSize) {
-               int read = inflater.read(output, offset, expectedSize - offset);
-               if (read < 0) {
-                  break;
-               }
-
-               offset += read;
-            }
-
-            if (offset != expectedSize) {
-               throw new IOException("Unexpected inflated data length");
-            }
-
-            var8 = output;
-         }
-
-         return var8;
+         return this.values[pixelY * RASTER_SIZE + pixelX] & 255;
       }
    }
 
-   private record Pixel(int x, int y) {
+   private record TileKey(int zoom, int x, int y) {
+      private String label() {
+         return this.zoom + "/" + this.x + "/" + this.y;
+      }
    }
 
-   private record ContinuousPixel(double x, double y) {
+   private record TilePosition(
+      TileKey key,
+      int pixelX,
+      int pixelY,
+      double globalPixelCoordinateX,
+      double globalPixelCoordinateY
+   ) {
+      private int globalPixelX() {
+         return this.key.x() * RASTER_SIZE + this.pixelX;
+      }
+
+      private int globalPixelY() {
+         return this.key.y() * RASTER_SIZE + this.pixelY;
+      }
    }
 
-   private record TileKey(int lat, int lon) {
-      String fileName() {
-         return String.format(Locale.ROOT, TILE_PATTERN, formatLatLon(this.lat, this.lon));
-      }
+   private record NearestLandKey(int zoom, int globalPixelX, int globalPixelY) {
+   }
 
-      private static String formatLatLon(int lat, int lon) {
-         char latPrefix = (char)(lat >= 0 ? 78 : 83);
-         char lonPrefix = (char)(lon >= 0 ? 69 : 87);
-         int latAbs = Math.abs(lat);
-         int lonAbs = Math.abs(lon);
-         return String.format(Locale.ROOT, "%c%02d%c%03d", latPrefix, latAbs, lonPrefix, lonAbs);
-      }
+   record NearestLandSearch(int coverClass, boolean complete) {
+   }
+
+   @FunctionalInterface
+   interface PixelCoverage {
+      boolean contains(int pixelX, int pixelY);
+   }
+
+   private record RasterFeature(int coverClass, int sortKey, List<Ring> rings) {
+   }
+
+   private record Ring(double[] xs, double[] ys) {
    }
 }
